@@ -1,0 +1,79 @@
+"""Anvil CLI — run on the GPU server (in the venv with torch+triton+okbench).
+
+    # smoke: hand-written kernel through okbench, NO LLM (proves the pipeline)
+    python -m anvil.cli smoke --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels --device 6
+
+    # run: full Claude agent loop
+    python -m anvil.cli run --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels \
+        --device 6 --max-iters 8
+"""
+from __future__ import annotations
+
+import argparse
+
+from .op import load_op
+from .okbench_runner import OKBenchRunner
+from .generator import HumanGenerator, LLMGenerator
+from .orchestrator import Orchestrator
+
+
+def _runner(args, op) -> OKBenchRunner:
+    return OKBenchRunner(
+        op, hardware=args.hardware, platform=args.platform, arch=args.arch,
+        device=args.device, author=args.author, python=args.python, suite=args.suite,
+    )
+
+
+def _cmd_smoke(args):
+    op = load_op(args.repo, args.op)
+    runner = _runner(args, op)
+    cand = HumanGenerator().propose(op, [])
+    res = runner.evaluate(cand, f"{args.author}_smoke")
+    print(f"[smoke] {op.name}: {res.summary()}")
+    for p in res.per_shape:
+        print(f"   {p}")
+    if not res.correct and res.error:
+        print("--- error ---\n" + res.error)
+
+
+def _cmd_run(args):
+    op = load_op(args.repo, args.op)
+    report = Orchestrator(
+        op, LLMGenerator(), _runner(args, op),
+        variant_prefix=args.author, max_iters=args.max_iters,
+        target_speedup=args.target_speedup,
+    ).run()
+    if report.best:
+        print("\n=== BEST kernel.cu ===\n")
+        print(report.best.candidate.kernel_cu)
+
+
+def main():
+    p = argparse.ArgumentParser(prog="anvil")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--op", default="gemm_bf16_nt")
+    common.add_argument("--repo", required=True, help="path to the OpenKernels repo")
+    common.add_argument("--hardware", default="5090")
+    common.add_argument("--platform", default="sm120_rtx5090")
+    common.add_argument("--arch", default="sm_120a")
+    common.add_argument("--device", type=int, default=6)
+    common.add_argument("--author", default="gucheng")
+    common.add_argument("--suite", default="required_5")
+    common.add_argument("--python", default=None, help="python running okbench (default: this one)")
+
+    ps = sub.add_parser("smoke", parents=[common], help="hand-written kernel, no LLM")
+    ps.set_defaults(func=_cmd_smoke)
+
+    pr = sub.add_parser("run", parents=[common], help="full Claude agent loop")
+    pr.add_argument("--max-iters", type=int, default=8)
+    pr.add_argument("--target-speedup", type=float, default=1.0)
+    pr.set_defaults(func=_cmd_run)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

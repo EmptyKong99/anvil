@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Local config / secrets
+*.env
+.env
+
+# Editors
+.vscode/
+.idea/

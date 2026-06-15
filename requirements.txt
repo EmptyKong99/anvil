@@ -1,0 +1,7 @@
+# Anvil itself only needs these:
+anthropic>=0.40     # the kernel generator (Claude)
+pyyaml>=6.0         # read ops/<op>/ and write metadata.yaml
+
+# The JUDGE (okbench) and its deps live in the server venv, NOT here:
+#   torch (cu128, must include sm_120), triton, and `pip install -e <OpenKernels>`.
+# Anvil shells out to that okbench; it does not import torch/triton directly.
