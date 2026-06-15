@@ -10,7 +10,7 @@ sm_120a, compiled with nvcc 13). You will be given an operator's C ABI and \
 reference, and — on later turns — the compiler/correctness/benchmark feedback \
 from your previous attempt.
 
-Emit one complete `kernel.cu` via the emit_kernel tool. Hard rules:
+Emit one complete `kernel.cu`. Hard rules:
 - PURE CUDA ONLY. Do NOT call or include cuBLAS, cuDNN, CUTLASS runtime, \
 DeepGEMM, FlashKDA, or any TileLang runtime. Hand-write the kernel. (A validator \
 rejects those tokens.)
@@ -28,7 +28,7 @@ fp32 accumulation, vectorized 128-bit loads, register blocking, avoid bank \
 conflicts, enough occupancy. Use mma/tensor-core PTX if you can do so correctly; \
 otherwise a well-tiled SIMT kernel is an acceptable first step.
 
-Emit only via the tool; `kernel_cu` must compile and run as-is."""
+The kernel.cu must compile and run as-is."""
 
 
 def build_user(op: Op) -> str:

@@ -3,9 +3,10 @@
     # smoke: hand-written kernel through okbench, NO LLM (proves the pipeline)
     python -m anvil.cli smoke --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels --device 6
 
-    # run: full Claude agent loop
+    # run: full LLM agent loop (DeepSeek by default; needs DEEPSEEK_API_KEY)
     python -m anvil.cli run --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels \
         --device 6 --max-iters 8
+    #   ...or Claude:  --provider claude   (needs ANTHROPIC_API_KEY)
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import argparse
 
 from .op import load_op
 from .okbench_runner import OKBenchRunner
-from .generator import HumanGenerator, LLMGenerator
+from .generator import HumanGenerator, make_generator
 from .orchestrator import Orchestrator
 
 
@@ -38,8 +39,9 @@ def _cmd_smoke(args):
 
 def _cmd_run(args):
     op = load_op(args.repo, args.op)
+    generator = make_generator(args.provider, args.model)
     report = Orchestrator(
-        op, LLMGenerator(), _runner(args, op),
+        op, generator, _runner(args, op),
         variant_prefix=args.author, max_iters=args.max_iters,
         target_speedup=args.target_speedup,
     ).run()
@@ -66,7 +68,10 @@ def main():
     ps = sub.add_parser("smoke", parents=[common], help="hand-written kernel, no LLM")
     ps.set_defaults(func=_cmd_smoke)
 
-    pr = sub.add_parser("run", parents=[common], help="full Claude agent loop")
+    pr = sub.add_parser("run", parents=[common], help="full LLM agent loop")
+    pr.add_argument("--provider", default="deepseek", choices=["deepseek", "claude"],
+                    help="LLM backend (default: deepseek, OpenAI-compatible API)")
+    pr.add_argument("--model", default=None, help="override the provider's default model")
     pr.add_argument("--max-iters", type=int, default=8)
     pr.add_argument("--target-speedup", type=float, default=1.0)
     pr.set_defaults(func=_cmd_run)
