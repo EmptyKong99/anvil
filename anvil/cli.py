@@ -42,7 +42,9 @@ def _cmd_smoke(args):
 
 def _cmd_run(args):
     op = load_op(args.repo, args.op)
-    run_dir = Path(args.out_dir).expanduser() / f"{op.name}_{datetime.now():%Y%m%d_%H%M%S}"
+    # absolute: okbench runs with cwd=OpenKernels, so a relative --output would
+    # land under the repo, not here, and we'd misread it as "compile failed".
+    run_dir = (Path(args.out_dir).expanduser() / f"{op.name}_{datetime.now():%Y%m%d_%H%M%S}").resolve()
     generator = make_generator(args.provider, args.model)
     report = Orchestrator(
         op, generator, _runner(args, op, out_dir=run_dir),
