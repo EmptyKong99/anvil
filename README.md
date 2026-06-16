@@ -1,76 +1,75 @@
-# Anvil
+# anvil — the automated LLM kernel-writing loop
 
-An LLM agent that **writes** high-performance CUDA kernels for the
-[OpenKernels Foundry](../OpenKernels说明.md). Anvil is only the *generator*; it
-does **not** judge kernels — correctness and performance are owned by
-OpenKernels' `okbench`. Anvil generates a `kernel.cu`, hands it to okbench, reads
-the verdict, and rewrites a faster version.
+anvil is the **fully-automated** sibling of `forge`. An LLM API **writes** a CUDA
+kernel for an [OpenKernels](../OpenKernels说明.md) op; `okbench` judges it
+(compile + correctness vs cuBLAS + timing); anvil feeds the verdict back and the
+LLM rewrites — keeping the best, archiving every attempt.
+
+- **forge** = the *agent* (Claude Code) writes kernels by hand (semi-auto). → 0.92× cuBLAS.
+- **anvil** = an *LLM API* writes them in a loop, unattended (full auto).
+- Same judge (`okbench`); anvil does **not** reinvent correctness/perf.
 
 ```
-ops/<op>/  ──▶  LLMGenerator (Claude)  ──▶  Candidate (kernel.cu)
-     ▲                                            │
-     │                                   OKBenchRunner.evaluate
-     │                          (write submission → okbench validate + bench)
-     └──────────── history ◀── EvalResult (per-shape correct + speedup vs ref)
+ops/<op>/ ─▶ Generator (LLM API) ─▶ Candidate(kernel.cu) ─▶ OKBenchRunner.evaluate
+    ▲                                                          │  (submission → okbench)
+    └─────────────── history (feedback) ◀── EvalResult (per-shape correct + speedup)
 ```
 
-## Design
+## Generator (pluggable)
+`make_generator(provider, model)`:
+- `deepseek` (default) — OpenAI-compatible API, default model **`deepseek-v4-pro`**
+  (reachable from the campus server; key in `secrets/keys.env`).
+- `claude` — Anthropic API.
 
-- **Generator (LLM)** writes a complete pure-CUDA `kernel.cu` implementing the
-  op's stable C ABI (e.g. `openkernels_launch_gemm_bf16_nt` from
-  `ops/gemm_bf16_nt/interface.h`). It reads okbench's compiler errors / per-shape
-  correctness / speedups to improve.
-- **Judge = okbench** (not reinvented): `OKBenchRunner` writes the submission,
-  runs `okbench validate` then `okbench bench-<op>`, and parses the result JSON
-  (`shapes[].correct`, `pure_over_reference`, geomean speedup).
-- We target the **stable-ABI path** first (LLM writes any kernel behind the C
-  ABI; flexible, torch reference). The kernel-body ranking path (which needs a
-  `tma_abc`-style metadata launch block) comes later.
+Output is parsed tolerantly (fenced block or whole reply); `max_tokens=65536` so a
+reasoning model's long chain-of-thought doesn't crowd out the kernel.
 
 ## Where it runs
-
-Anvil runs **on the GPU server**, in the venv that has `torch` (cu128, with
-`sm_120`) + `triton` + `okbench` installed, next to the OpenKernels repo. The
-LLM calls go out from there (needs `ANTHROPIC_API_KEY` + internet). The Mac is
-just for editing — rsync the `anvil/` package over to run it.
-
-## Files
-
-```
-anvil/
-  op.py            load ops/<op>/ (interface.h, reference, shapes, tolerance)
-  candidate.py     Candidate (kernel.cu) + EvalResult (parses okbench JSON)
-  baselines.py     hand-written correct kernels for the smoke path
-  okbench_runner.py write submission → okbench validate + bench → EvalResult
-  generator.py     LLMGenerator (Claude, forced emit_kernel tool) + HumanGenerator
-  prompts.py       system prompt + feedback formatting
-  orchestrator.py  generate → evaluate → feed back → repeat, keep best
-  cli.py
-tests/test_smoke.py  offline plumbing checks (no GPU/LLM)
-```
+On the **GPU server** as a git clone (`/nvme/share/gucheng/anvil`), in the venv
+with torch (cu128/sm_120) + okbench, next to the OpenKernels repo. The generator
+API must be reachable from the server (DeepSeek is; OpenAI/Gemini are blocked).
+Edit on the Mac → push → `git pull` on the server.
 
 ## Run
-
-On the **server** (venv active, repo at `/nvme/share/gucheng/OpenKernels`):
-
 ```bash
-pip install anthropic pyyaml          # into the venv that has torch+triton+okbench
-export ANTHROPIC_API_KEY=...
+source /nvme/share/gucheng/secrets/keys.env        # DEEPSEEK_API_KEY
+cd /nvme/share/gucheng/anvil
 
-# 1) prove the pipeline with a hand-written kernel (NO LLM)
-python -m anvil.cli smoke --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels --device 6
+# smoke: hand-written baseline through okbench, NO LLM (proves the pipeline)
+.venv/bin/python -m anvil.cli smoke --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels --device 0
 
-# 2) full agent loop
-python -m anvil.cli run --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels \
-    --device 6 --max-iters 8 --target-speedup 0.9
+# run: full auto loop (default provider deepseek / model deepseek-v4-pro)
+.venv/bin/python -m anvil.cli run --op gemm_bf16_nt --repo /nvme/share/gucheng/OpenKernels \
+    --device 0 --max-iters 8
+#   long runs: launch detached so they survive disconnects —
+#   setsid ... > run.log 2>&1 </dev/null &
 ```
-
 Defaults: `--hardware 5090 --platform sm120_rtx5090 --arch sm_120a --author gucheng`.
 
-On the **Mac** you can only run the offline checks: `pytest tests/`.
+## Run artifacts
+Each run archives to **`runs/<op>_<timestamp>/`** (gitignored, kept on the server):
+- `iterNN_<variant>.cu` — every kernel tried
+- `results.jsonl` — per-iter stage / correct / geomean / error
+- `best.cu` + `summary.json`
 
-## Status
+(The kernel is also deployed into `OpenKernels/submissions/...` because okbench
+requires it there; that copy is transient — the run archive is the record.)
 
-Generator + okbench bridge + loop are written. Not yet run on a GPU — the first
-real check is the `smoke` command above (compiles the baseline kernel for
-`sm_120a` and runs it through okbench on card 6).
+## Files
+```
+anvil/op.py             load ops/<op>/ (interface.h, reference, shapes, tolerance)
+anvil/candidate.py      Candidate + EvalResult (parse okbench JSON)
+anvil/generator.py      make_generator: OpenAICompat (DeepSeek) / Claude / Human
+anvil/prompts.py        system prompt + feedback formatting
+anvil/okbench_runner.py write submission → okbench validate+bench → EvalResult
+anvil/orchestrator.py   the loop; archives to run_dir
+anvil/baselines.py      hand-written correct kernels for the smoke path
+anvil/cli.py
+tests/test_smoke.py     offline plumbing checks (no GPU/LLM)
+```
+
+## Status (2026-06)
+Runs end-to-end on RTX 5090. `deepseek-v4-pro` autonomously produced a *correct*
+kernel (~0.19× cuBLAS, basic wmma). The gap vs forge's hand-written 0.92× is real
+but expected — the levers are generator quality, iteration budget, and feeding the
+forge `wiki/` + `skills/` knowledge into the prompt (next).
