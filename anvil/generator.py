@@ -23,6 +23,7 @@ from .baselines import SMOKE_KERNELS
 
 CLAUDE_MODEL = "claude-opus-4-8"
 DEEPSEEK_MODEL = "deepseek-reasoner"          # V3-R1; strong at code, ~100x cheaper than Opus
+DEEPSEEK_MAX_TOKENS = 16384                    # kernels are long; avoid truncating the fenced block
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # Appended for OpenAI-compatible providers that return free text (no tool schema).
@@ -48,15 +49,30 @@ def _build_prompt(op: Op, history: list[EvalResult]) -> tuple[str, str]:
     return system, user
 
 
-def _parse_fenced_kernel(text: str) -> tuple[str, str]:
-    """Pull the kernel.cu (largest fenced block) and the NOTES line out of free text."""
+def _parse_fenced_kernel(text: str, *, finish_reason: str | None = None) -> tuple[str, str]:
+    """Pull the kernel.cu and the NOTES line out of free text, tolerating sloppy output."""
+    notes_m = re.search(r"NOTES:\s*(.+)", text)
+    notes = notes_m.group(1).strip() if notes_m else ""
+
+    # 1. properly-closed fenced blocks → take the largest
     blocks = re.findall(r"```(?:[A-Za-z0-9_+\-]*)\n(.*?)```", text, re.DOTALL)
-    if not blocks:
-        raise RuntimeError("model returned no fenced code block")
-    kernel = max(blocks, key=len).strip()
-    m = re.search(r"NOTES:\s*(.+)", text)
-    notes = m.group(1).strip() if m else ""
-    return kernel, notes
+    if blocks:
+        return max(blocks, key=len).strip(), notes
+
+    # 2. a single unclosed fence (output truncated before the closing ```)
+    m = re.search(r"```(?:[A-Za-z0-9_+\-]*)\n(.*)\Z", text, re.DOTALL)
+    if m and ("#include" in m.group(1) or "__global__" in m.group(1)):
+        return m.group(1).strip(), notes
+
+    # 3. no fence at all, but the whole reply looks like the file
+    if "#include" in text or 'extern "C"' in text:
+        return text.strip(), notes
+
+    snippet = text[:400].replace("\n", "\\n")
+    raise RuntimeError(
+        f"model returned no usable kernel (finish_reason={finish_reason}); "
+        f"first 400 chars: {snippet!r}"
+    )
 
 
 # --- generators -------------------------------------------------------------
@@ -83,7 +99,7 @@ class OpenAICompatGenerator(Generator):
     def __init__(self, *, model: str = DEEPSEEK_MODEL,
                  base_url: str = DEEPSEEK_BASE_URL,
                  api_key_env: str = "DEEPSEEK_API_KEY",
-                 max_tokens: int = 8192):
+                 max_tokens: int = DEEPSEEK_MAX_TOKENS):
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -105,9 +121,11 @@ class OpenAICompatGenerator(Generator):
                 {"role": "user", "content": user},
             ],
         )
-        text = resp.choices[0].message.content or ""
-        kernel_cu, notes = _parse_fenced_kernel(text)
-        return Candidate(kernel_cu=kernel_cu, notes=notes, meta={"model": self.model})
+        choice = resp.choices[0]
+        text = choice.message.content or ""
+        kernel_cu, notes = _parse_fenced_kernel(text, finish_reason=choice.finish_reason)
+        return Candidate(kernel_cu=kernel_cu, notes=notes,
+                         meta={"model": self.model, "finish_reason": choice.finish_reason})
 
 
 class ClaudeGenerator(Generator):

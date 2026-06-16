@@ -37,7 +37,11 @@ class Orchestrator:
 
         for it in range(1, self.max_iters + 1):
             self._log(f"iter {it}/{self.max_iters}: generating…")
-            candidate = self.generator.propose(self.op, history)
+            try:
+                candidate = self.generator.propose(self.op, history)
+            except Exception as e:
+                self._log(f"iter {it}: generation failed, skipping — {e}")
+                continue
             variant = f"{self.variant_prefix}_v{it:02d}"
 
             result = self.runner.evaluate(candidate, variant)
