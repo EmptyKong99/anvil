@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+from pathlib import Path
 
 from .op import load_op
 from .okbench_runner import OKBenchRunner
@@ -18,10 +20,11 @@ from .generator import HumanGenerator, make_generator
 from .orchestrator import Orchestrator
 
 
-def _runner(args, op) -> OKBenchRunner:
+def _runner(args, op, out_dir: Path | None = None) -> OKBenchRunner:
     return OKBenchRunner(
         op, hardware=args.hardware, platform=args.platform, arch=args.arch,
         device=args.device, author=args.author, python=args.python, suite=args.suite,
+        out_dir=out_dir,
     )
 
 
@@ -39,15 +42,16 @@ def _cmd_smoke(args):
 
 def _cmd_run(args):
     op = load_op(args.repo, args.op)
+    run_dir = Path(args.out_dir).expanduser() / f"{op.name}_{datetime.now():%Y%m%d_%H%M%S}"
     generator = make_generator(args.provider, args.model)
     report = Orchestrator(
-        op, generator, _runner(args, op),
+        op, generator, _runner(args, op, out_dir=run_dir),
         variant_prefix=args.author, max_iters=args.max_iters,
-        target_speedup=args.target_speedup,
+        target_speedup=args.target_speedup, run_dir=run_dir,
     ).run()
+    print(f"\n[anvil] artifacts archived in {run_dir}")
     if report.best:
-        print("\n=== BEST kernel.cu ===\n")
-        print(report.best.candidate.kernel_cu)
+        print(f"[anvil] best: {report.best.summary()}  (best.cu in run dir)")
 
 
 def main():
@@ -74,6 +78,8 @@ def main():
     pr.add_argument("--model", default=None, help="override the provider's default model")
     pr.add_argument("--max-iters", type=int, default=8)
     pr.add_argument("--target-speedup", type=float, default=1.0)
+    pr.add_argument("--out-dir", default="runs",
+                    help="archive each run under <out-dir>/<op>_<timestamp>/ (default: runs/)")
     pr.set_defaults(func=_cmd_run)
 
     args = p.parse_args()

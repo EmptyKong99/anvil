@@ -21,3 +21,6 @@ env/
 # Editors
 .vscode/
 .idea/
+
+# anvil run artifacts (kept on the server under gucheng)
+runs/

@@ -23,7 +23,7 @@ class OKBenchRunner:
                  platform: str = "sm120_rtx5090", arch: str = "sm_120a",
                  device: int = 6, author: str = "gucheng",
                  python: str | None = None, suite: str = "required_5",
-                 timeout: int = 1800):
+                 timeout: int = 1800, out_dir: Path | None = None):
         self.op = op
         self.repo = op.repo_root
         self.hardware = hardware
@@ -34,6 +34,7 @@ class OKBenchRunner:
         self.python = python or sys.executable    # the venv python running okbench
         self.suite = suite
         self.timeout = timeout
+        self.out_dir = out_dir                      # where to keep okbench JSONs (not /tmp)
 
     # --- submission files ---------------------------------------------------
 
@@ -76,7 +77,9 @@ class OKBenchRunner:
                               error=(v.stdout + v.stderr).strip()[-2000:])
 
         # 2. compile + correctness + timing through the stable ABI
-        out_json = Path(tempfile.gettempdir()) / f"anvil_{self.op.name}_{variant}.json"
+        out_root = self.out_dir or Path(tempfile.gettempdir())
+        out_root.mkdir(parents=True, exist_ok=True)
+        out_json = out_root / f"{self.op.name}_{variant}.json"
         b = self._okbench(
             self.op.bench_cmd,
             "--op", self.op.name, "--variant", variant,

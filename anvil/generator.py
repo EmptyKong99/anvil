@@ -23,7 +23,7 @@ from .baselines import SMOKE_KERNELS
 
 CLAUDE_MODEL = "claude-opus-4-8"
 DEEPSEEK_MODEL = "deepseek-v4-pro"            # live strong model (old "deepseek-reasoner" alias is gone)
-DEEPSEEK_MAX_TOKENS = 32768                    # reasoning models spend budget on thinking; leave room for the kernel too
+DEEPSEEK_MAX_TOKENS = 65536                    # reasoning models spend a lot on thinking; leave ample room for the kernel
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # Appended for OpenAI-compatible providers that return free text (no tool schema).
