@@ -10,11 +10,7 @@ from pathlib import Path
 
 import yaml
 
-# op name -> the okbench CLI subcommand that runs its stable-ABI benchmark.
-# Only gemm_bf16_nt is wired up for now (torch reference, no submodule needed).
-OKBENCH_BENCH_CMD = {
-    "gemm_bf16_nt": "bench-gemm-bf16",
-}
+from .okeval import bench_cmd as _bench_cmd  # single source for op->subcommand
 
 
 @dataclass
@@ -31,13 +27,7 @@ class Op:
 
     @property
     def bench_cmd(self) -> str:
-        try:
-            return OKBENCH_BENCH_CMD[self.name]
-        except KeyError:
-            raise NotImplementedError(
-                f"op {self.name!r} not wired into Anvil yet; supported: "
-                f"{list(OKBENCH_BENCH_CMD)}"
-            )
+        return _bench_cmd(self.name)
 
     def shape_names(self) -> list[str]:
         return [s["name"] for s in self.shapes]
