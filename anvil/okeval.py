@@ -93,36 +93,57 @@ def _okbench(python: str, repo: Path, *args: str,
                           timeout=timeout)
 
 
+def _unwrap_okbench_compile(text: str) -> str | None:
+    """okbench raises `RuntimeError(json.dumps({...,"stderr":<nvcc>,...}))` on a
+    compile failure, so the real nvcc output arrives JSON-escaped and buried under
+    okbench's own python traceback. Pull the compiler stderr/stdout back out (un-
+    escaped) and drop the traceback. Returns None if `text` isn't that shape."""
+    marker = "RuntimeError: "
+    i = text.rfind(marker)
+    if i < 0:
+        return None
+    try:
+        obj = json.loads(text[i + len(marker):])
+    except (ValueError, TypeError):
+        return None
+    parts = [s.strip() for s in (obj.get("stderr"), obj.get("stdout")) if s and s.strip()]
+    if not parts:
+        return None
+    cmd = (obj.get("plan") or {}).get("shell_command")
+    out = "\n".join(parts)
+    return out + (f"\n\n(compile command: {cmd})" if cmd else "")
+
+
 def trim_error(stdout: str, stderr: str, limit: int) -> str:
     """Build the error string fed BACK to the LLM — the thing it has to fix.
 
-    Old behaviour (tail-only `[-N:]`) was wrong: nvcc/ptxas print the actual
-    `error:` line near the TOP and only "N errors detected" / a stack tail at the
-    bottom, so tail slicing routinely threw away the real cause and handed the
-    model warnings or okbench's own python traceback instead. Fix:
-      1. surface every real compiler `error:` / `ptxas` line FIRST (the signal);
-      2. then a head+tail excerpt of the full log (head = where nvcc errors live,
-         tail = the exit reason), middle trimmed — never a blind tail slice.
-    If there are no compiler-error lines (e.g. okbench crashed before nvcc), step 2
-    alone surfaces that traceback, which is then the genuine error.
+    Old behaviour (tail-only `[-N:]`) was wrong: it handed the model okbench's
+    python traceback / "N errors detected" tail instead of the actual nvcc
+    `error:` line. Fix, in order:
+      0. if this is okbench's compile RuntimeError, unwrap the embedded nvcc
+         stderr (the traceback itself is noise) — see `_unwrap_okbench_compile`;
+      1. ALWAYS hoist every real compiler `error:` / `ptxas` line to the top — not
+         gated on length: most compile errors are short but still lead with the
+         traceback / warnings, so the model needs the cause up front regardless;
+      2. then the (head+tail trimmed) full output for context.
+    No compiler-error lines (e.g. okbench crashed before nvcc) -> step 2 alone
+    surfaces that traceback, which is then the genuine error.
     """
     text = (stdout + "\n" + stderr).strip()
-    if len(text) <= limit:
-        return text
+    text = _unwrap_okbench_compile(text) or text
 
     err_lines = [ln for ln in text.splitlines()
                  if "error:" in ln.lower() or ln.lstrip().lower().startswith("ptxas")]
-    parts = []
+    head_block = ""
     if err_lines:
         key = "\n".join(err_lines[:40])[: limit // 2]
-        parts.append("KEY COMPILER ERRORS:\n" + key)
+        head_block = "KEY COMPILER ERRORS:\n" + key + "\n\n"
 
-    budget = max(800, limit - sum(len(p) for p in parts))
-    head = budget * 2 // 3
-    tail = budget - head
-    parts.append("FULL OUTPUT (head+tail, middle trimmed):\n"
-                 + text[:head] + "\n\n...[middle trimmed]...\n\n" + text[-tail:])
-    return "\n\n".join(parts)
+    budget = max(800, limit - len(head_block))
+    if len(text) > budget:
+        head = budget * 2 // 3
+        text = text[:head] + "\n\n...[middle trimmed]...\n\n" + text[-(budget - head):]
+    return head_block + text
 
 
 def evaluate(repo: Path, op: str, variant: str, kernel_src: str, *,

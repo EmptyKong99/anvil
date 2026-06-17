@@ -55,6 +55,28 @@ def test_trim_error_surfaces_top_nvcc_error_not_just_tail():
     assert len(out) < len(top + filler + tail)             # and it was trimmed
 
 
+def test_trim_error_unwraps_okbench_compile_runtimeerror():
+    # okbench's real compile-failure shape: a python traceback whose last line is
+    # RuntimeError(json.dumps({..., "stderr": <nvcc output>, ...})). The nvcc cause
+    # must be surfaced and lead; okbench's own traceback frames must be dropped.
+    import json
+    nvcc = ('submissions/5090/gemm_bf16_nt/v/kernel.cu(51): error: identifier '
+            '"foo" is undefined\n      int z = foo;\n              ^\n\n'
+            '1 error detected in the compilation of "kernel.cu".\n')
+    blob = json.dumps({"plan": {"shell_command": "nvcc -O3 kernel.cu -o k.so"},
+                       "returncode": 2, "stderr": nvcc, "stdout": ""}, indent=2)
+    tb = ('Traceback (most recent call last):\n'
+          '  File ".../okbench/cli.py", line 663, in <module>\n    main()\n'
+          '  File ".../okbench/gemm_runner.py", line 457, in _maybe_compile\n'
+          '    raise RuntimeError(...)\n'
+          'RuntimeError: ' + blob)
+    out = trim_error("", tb, limit=4000)
+    assert "KEY COMPILER ERRORS" in out
+    assert 'identifier "foo" is undefined' in out
+    assert "Traceback (most recent call last)" not in out          # okbench noise gone
+    assert out.index('identifier "foo"') < out.index("compile command")
+
+
 def test_trim_error_surfaces_traceback_when_no_compiler_error():
     # okbench crashed before nvcc: no `error:` lines, so just head+tail the log
     # (the head is where the real traceback / cause lives).
