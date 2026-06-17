@@ -93,6 +93,38 @@ def _okbench(python: str, repo: Path, *args: str,
                           timeout=timeout)
 
 
+def trim_error(stdout: str, stderr: str, limit: int) -> str:
+    """Build the error string fed BACK to the LLM — the thing it has to fix.
+
+    Old behaviour (tail-only `[-N:]`) was wrong: nvcc/ptxas print the actual
+    `error:` line near the TOP and only "N errors detected" / a stack tail at the
+    bottom, so tail slicing routinely threw away the real cause and handed the
+    model warnings or okbench's own python traceback instead. Fix:
+      1. surface every real compiler `error:` / `ptxas` line FIRST (the signal);
+      2. then a head+tail excerpt of the full log (head = where nvcc errors live,
+         tail = the exit reason), middle trimmed — never a blind tail slice.
+    If there are no compiler-error lines (e.g. okbench crashed before nvcc), step 2
+    alone surfaces that traceback, which is then the genuine error.
+    """
+    text = (stdout + "\n" + stderr).strip()
+    if len(text) <= limit:
+        return text
+
+    err_lines = [ln for ln in text.splitlines()
+                 if "error:" in ln.lower() or ln.lstrip().lower().startswith("ptxas")]
+    parts = []
+    if err_lines:
+        key = "\n".join(err_lines[:40])[: limit // 2]
+        parts.append("KEY COMPILER ERRORS:\n" + key)
+
+    budget = max(800, limit - sum(len(p) for p in parts))
+    head = budget * 2 // 3
+    tail = budget - head
+    parts.append("FULL OUTPUT (head+tail, middle trimmed):\n"
+                 + text[:head] + "\n\n...[middle trimmed]...\n\n" + text[-tail:])
+    return "\n\n".join(parts)
+
+
 def evaluate(repo: Path, op: str, variant: str, kernel_src: str, *,
              out_json: Path, hardware: str = "5090",
              platform: str = "sm120_rtx5090", arch: str = "sm_120a",
@@ -121,7 +153,7 @@ def evaluate(repo: Path, op: str, variant: str, kernel_src: str, *,
                      timeout=timeout)
         if v.returncode != 0:
             return EvalOutcome("validate", False,
-                               error=(v.stdout + v.stderr).strip()[-2000:])
+                               error=trim_error(v.stdout, v.stderr, 4000))
 
     # 2. compile + correctness + timing through the stable ABI
     b = _okbench(
@@ -136,7 +168,7 @@ def evaluate(repo: Path, op: str, variant: str, kernel_src: str, *,
     if b.returncode != 0 or not out_json.exists():
         # nvcc compile error or a launch crash both land here
         return EvalOutcome("compile", False,
-                           error=(b.stdout + b.stderr).strip()[-3000:],
+                           error=trim_error(b.stdout, b.stderr, 8000),
                            out_json=out_json)
 
     return EvalOutcome("bench", True, result=json.loads(out_json.read_text()),
