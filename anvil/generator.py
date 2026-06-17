@@ -39,12 +39,15 @@ sentences on what you changed and why). Output nothing else."""
 
 # --- shared prompt building -------------------------------------------------
 
-def _build_prompt(op: Op, history: list[EvalResult]) -> tuple[str, str]:
+def _build_prompt(op: Op, history: list[EvalResult],
+                  extra_system: str = "") -> tuple[str, str]:
     header_path = f"ops/{op.name}/interface.h"
     system = prompts.SYSTEM.format(
         header_path=header_path, entry_symbol=op.entry_symbol,
         atol=op.atol, rtol=op.rtol,
     )
+    if extra_system:                       # composable hook: injected skill/knowledge
+        system += "\n\n" + extra_system
     user = prompts.build_user(op) + "\n" + prompts.build_feedback(history)
     return system, user
 
@@ -99,7 +102,9 @@ class OpenAICompatGenerator(Generator):
     def __init__(self, *, model: str = DEEPSEEK_MODEL,
                  base_url: str = DEEPSEEK_BASE_URL,
                  api_key_env: str = "DEEPSEEK_API_KEY",
-                 max_tokens: int = DEEPSEEK_MAX_TOKENS):
+                 max_tokens: int = DEEPSEEK_MAX_TOKENS,
+                 extra_system: str = ""):
+        self.extra_system = extra_system
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -112,7 +117,7 @@ class OpenAICompatGenerator(Generator):
         self.max_tokens = max_tokens
 
     def propose(self, op: Op, history: list[EvalResult]) -> Candidate:
-        system, user = _build_prompt(op, history)
+        system, user = _build_prompt(op, history, self.extra_system)
         resp = self.client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -149,7 +154,9 @@ class ClaudeGenerator(Generator):
         },
     }
 
-    def __init__(self, model: str = CLAUDE_MODEL, effort: str = "high"):
+    def __init__(self, model: str = CLAUDE_MODEL, effort: str = "high",
+                 extra_system: str = ""):
+        self.extra_system = extra_system
         try:
             import anthropic
         except ImportError as e:
@@ -159,7 +166,7 @@ class ClaudeGenerator(Generator):
         self.effort = effort
 
     def propose(self, op: Op, history: list[EvalResult]) -> Candidate:
-        system, user = _build_prompt(op, history)
+        system, user = _build_prompt(op, history, self.extra_system)
         with self.client.messages.stream(
             model=self.model,
             max_tokens=32000,
@@ -184,10 +191,12 @@ class ClaudeGenerator(Generator):
 LLMGenerator = ClaudeGenerator
 
 
-def make_generator(provider: str = "deepseek", model: str | None = None) -> Generator:
+def make_generator(provider: str = "deepseek", model: str | None = None,
+                   inject_skill: bool = False) -> Generator:
+    extra = prompts.PTX_GEMM_SKILL if inject_skill else ""
     provider = provider.lower()
     if provider == "deepseek":
-        return OpenAICompatGenerator(model=model or DEEPSEEK_MODEL)
+        return OpenAICompatGenerator(model=model or DEEPSEEK_MODEL, extra_system=extra)
     if provider == "claude":
-        return ClaudeGenerator(model=model or CLAUDE_MODEL)
+        return ClaudeGenerator(model=model or CLAUDE_MODEL, extra_system=extra)
     raise ValueError(f"unknown provider {provider!r}; choose 'deepseek' or 'claude'")

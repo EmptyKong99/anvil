@@ -45,7 +45,7 @@ def _cmd_run(args):
     # absolute: okbench runs with cwd=OpenKernels, so a relative --output would
     # land under the repo, not here, and we'd misread it as "compile failed".
     run_dir = (Path(args.out_dir).expanduser() / f"{op.name}_{datetime.now():%Y%m%d_%H%M%S}").resolve()
-    generator = make_generator(args.provider, args.model)
+    generator = make_generator(args.provider, args.model, inject_skill=args.inject_skill)
     report = Orchestrator(
         op, generator, _runner(args, op, out_dir=run_dir),
         variant_prefix=args.author, max_iters=args.max_iters,
@@ -82,6 +82,8 @@ def main():
     pr.add_argument("--target-speedup", type=float, default=1.0)
     pr.add_argument("--out-dir", default="runs",
                     help="archive each run under <out-dir>/<op>_<timestamp>/ (default: runs/)")
+    pr.add_argument("--inject-skill", action="store_true",
+                    help="inject the distilled PTX GEMM skill into the system prompt (A/B test)")
     pr.set_defaults(func=_cmd_run)
 
     args = p.parse_args()

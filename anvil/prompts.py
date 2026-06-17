@@ -31,6 +31,40 @@ otherwise a well-tiled SIMT kernel is an acceptable first step.
 The kernel.cu must compile and run as-is."""
 
 
+# Distilled PTX skill, injected into the system prompt only when --inject-skill.
+# Source (provenance): our OWN kernels gemm_bf16_nt v7_mma.cu / v8_pipe.cu, verified
+# on RTX 5090 (sm_120) by okbench at ~0.92x cuBLAS. This is distilled from real
+# practice + measurement, NOT from the model's latent knowledge. A/B target.
+PTX_GEMM_SKILL = """\
+EXPERT PTX RECIPE for fast BF16 GEMM on sm_120 (distilled from our own kernels,
+measured on RTX 5090 via okbench: the wmma path plateaus ~0.88x cuBLAS; raw
+mma.sync is REQUIRED to beat it — our v8 reaches ~0.92x).
+
+Instructions (sm_80+, valid on sm_120 — NOT wgmma / tcgen05):
+  mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {d0..d3},{a0..a3},{b0,b1},{c0..c3};
+  ldmatrix.sync.aligned.m8n8.x4.shared.b16  {r0..r3},[addr];  // A 16x16
+  ldmatrix.sync.aligned.m8n8.x2.shared.b16  {r0,r1},[addr];   // B 16x8
+Per thread: A=4xb32(8 bf16), B=2xb32(4 bf16), C/D=4xf32. addr = u32 from
+__cvta_generic_to_shared(ptr) (a SHARED address).
+
+C/D accumulator layout for the epilogue store (group=lane/4, tidg=lane%4):
+  d0->(group,2*tidg) d1->(group,2*tidg+1) d2->(group+8,2*tidg) d3->(group+8,2*tidg+1)
+
+ldmatrix addressing (each lane supplies one 8-wide row of an 8x8 tile):
+  A row-major MxK in shared: addr=&As[rowbase+lane%16][k+(lane/16)*8]
+  B col-major KxN in shared:  addr=&Bs[nbase+lane%8][k+((lane/8)&1)*8]
+
+CRITICAL CORRECTNESS GOTCHA (cost us a debug iteration): for NT GEMM C=A·B^T,
+input B[N,K] row-major stored as Bs[n][k] is ALREADY column-major K×N — exactly
+what the .col B operand wants. Load it with PLAIN ldmatrix, NOT ldmatrix.trans.
+.trans compiles and runs fast but is NUMERICALLY WRONG. (Use .trans only if B is
+stored row-major N×K.)
+
+Recipe that worked: 128x128 tile, 8 warps, cp.async double-buffered global->shared,
+register-resident f32 accumulators, ldmatrix feeding mma.sync per 16-wide k substep;
+software-pipeline (issue both k-substep loads, then the mma) for a final ~1pp."""
+
+
 def build_user(op: Op) -> str:
     return (
         f"Operator: {op.name}\n{op.description}\n\n"
