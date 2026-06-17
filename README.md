@@ -61,7 +61,7 @@ anvil/op.py             load ops/<op>/ (interface.h, reference, shapes, toleranc
 anvil/candidate.py      Candidate + EvalResult (parse okbench JSON)
 anvil/generator.py      make_generator: OpenAICompat (DeepSeek) / Claude / Human
 anvil/prompts.py        system prompt + feedback formatting
-anvil/okeval.py         canonical deploy→okbench→parse (forge bench.sh calls this too)
+anvil/okeval.py         deploy→okbench→parse (forge has its own vendored copy)
 anvil/okbench_runner.py thin adapter: okeval.evaluate → EvalResult
 anvil/orchestrator.py   the loop; archives to run_dir
 anvil/baselines.py      hand-written correct kernels for the smoke path

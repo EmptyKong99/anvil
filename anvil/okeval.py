@@ -1,13 +1,11 @@
-"""Canonical okbench eval — the one place that does deploy -> okbench -> parse.
+"""okbench eval for anvil — deploy -> okbench -> parse, in one place.
 
-Both consumers go through here so the logic can't drift:
-  * anvil's `okbench_runner.OKBenchRunner` imports `evaluate()` and wraps the
-    result in an `EvalResult` for the agent loop.
-  * forge's `tools/bench.sh` shells out to `python -m anvil.okeval ...` (it
-    already runs on anvil's venv) and prints `format_summary()`.
+`okbench_runner.OKBenchRunner` calls `evaluate()` and wraps the result in an
+`EvalResult` for the agent loop; `op.py` imports the op->subcommand map from here.
+Low layer: stdlib + yaml only, no dependency on `candidate`/`op` (avoids a cycle).
 
-This module is the low layer: stdlib + yaml only, no dependency on anvil's
-`candidate`/`op` (so `op.py` can import the op->subcommand map from here).
+NOTE: identical sibling of `forge/tools/okeval.py`. Kept in sync by hand (the
+price of staying as two separate repos); merging the repos later removes the dup.
 """
 from __future__ import annotations
 

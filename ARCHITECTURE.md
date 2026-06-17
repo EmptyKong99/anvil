@@ -29,14 +29,14 @@ reinvented); the **orchestrator** is the loop.
 frozen-ish `Op`. `Op.bench_cmd` delegates to `okeval.bench_cmd` (the op →
 okbench-subcommand map lives once, in `okeval`). We read specs, never redefine them.
 
-### `okeval.py` — the canonical eval (shared with forge)
-The one place that does **deploy → okbench → parse**, so the logic can't drift
-between anvil and forge. Holds `OKBENCH_BENCH_CMD` (single source), `evaluate()`
-(write submission → `okbench validate` → `okbench bench-<op>` → parsed JSON, as a
-plain `EvalOutcome`), and `format_summary()`. Low layer: stdlib + yaml only, no
-dependency on `candidate`/`op`. Has a `__main__` CLI (`python -m anvil.okeval
---repo … --op … --variant … --src … --out …`) that **forge's `tools/bench.sh`
-shells out to** (it already runs on anvil's venv; PYTHONPATH adds the anvil repo).
+### `okeval.py` — the eval (deploy → okbench → parse)
+The one place (within anvil) that does **deploy → okbench → parse**. Holds
+`OKBENCH_BENCH_CMD` (single source for anvil), `evaluate()` (write submission →
+`okbench validate` → `okbench bench-<op>` → parsed JSON, as a plain `EvalOutcome`),
+and `format_summary()`. Low layer: stdlib + yaml only, no dependency on
+`candidate`/`op`. Also has a `__main__` CLI. **forge has its own identical copy**
+at `forge/tools/okeval.py` (the two repos stay decoupled, so the file is vendored
+and kept in sync by hand; Tier 3 merge removes the dup).
 
 ### `candidate.py` — the data passed around
 - `Candidate`: the proposal — `kernel_cu` (str), `notes`, `meta`.
@@ -87,10 +87,12 @@ A hand-written correct (slow) kernel string for `smoke`. Really test data living
 in the package.
 
 ## Known rough edges (optimization points)
-1. ~~Eval duplicated with forge.~~ **Fixed (Tier 2):** deploy→okbench→parse lives
-   once in `okeval.py`; `okbench_runner.py` and forge's `tools/bench.sh` both call it.
-2. ~~op→okbench-subcommand mapping duplicated.~~ **Fixed:** single
-   `OKBENCH_BENCH_CMD` in `okeval`; `op.py` imports it.
+1. **Eval logic extracted to `okeval.py` (Tier 2).** Within anvil it's the single
+   source (okbench_runner + op.py use it). forge keeps an *identical vendored copy*
+   (`forge/tools/okeval.py`) so the two repos stay decoupled — synced by hand until
+   the Tier 3 merge dissolves the duplication.
+2. ~~op→okbench-subcommand mapping duplicated within anvil.~~ **Fixed:** single
+   `OKBENCH_BENCH_CMD` in `okeval`; `op.py` imports it. (forge's copy has its own.)
 3. **Prompt is hard-coded / not composable.** Injecting the forge `wiki/`+`skills/`
    knowledge needs a clean "extra context" hook in `_build_prompt`.
 4. **Config sprawl.** hardware/platform/arch/device/author/suite are threaded by
