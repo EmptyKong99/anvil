@@ -26,8 +26,17 @@ reinvented); the **orchestrator** is the loop.
 `load_op(repo, name)` reads `ops/<op>/` from the OpenKernels repo: `op.yaml`
 (entry_symbol, description), `interface.h` (the C ABI text), `reference.py`
 (ground truth), `shapes.yaml` (the suite), `tolerance.yaml` (atol/rtol). Returns a
-frozen-ish `Op`. `OKBENCH_BENCH_CMD` maps op → okbench subcommand
-(`gemm_bf16_nt → bench-gemm-bf16`). We read specs, never redefine them.
+frozen-ish `Op`. `Op.bench_cmd` delegates to `okeval.bench_cmd` (the op →
+okbench-subcommand map lives once, in `okeval`). We read specs, never redefine them.
+
+### `okeval.py` — the canonical eval (shared with forge)
+The one place that does **deploy → okbench → parse**, so the logic can't drift
+between anvil and forge. Holds `OKBENCH_BENCH_CMD` (single source), `evaluate()`
+(write submission → `okbench validate` → `okbench bench-<op>` → parsed JSON, as a
+plain `EvalOutcome`), and `format_summary()`. Low layer: stdlib + yaml only, no
+dependency on `candidate`/`op`. Has a `__main__` CLI (`python -m anvil.okeval
+--repo … --op … --variant … --src … --out …`) that **forge's `tools/bench.sh`
+shells out to** (it already runs on anvil's venv; PYTHONPATH adds the anvil repo).
 
 ### `candidate.py` — the data passed around
 - `Candidate`: the proposal — `kernel_cu` (str), `notes`, `meta`.
@@ -52,14 +61,14 @@ shapes + full interface.h + full reference.py), `build_feedback(history)` (last
 attempt's stage/error/per-shape speedups + best-so-far).
 
 ### `okbench_runner.py` — the bridge to the judge
-`evaluate(candidate, variant)`: `_write_submission` (kernel.cu + metadata.yaml
-into `OpenKernels/submissions/<hw>/<op>/<variant>/`) → `okbench validate` →
-`okbench bench-<op>` (writes result JSON to `out_dir`) → `EvalResult.from_okbench`.
-Runs okbench as a subprocess with **cwd = OpenKernels repo**.
+`evaluate(candidate, variant)` is now a thin adapter: it calls `okeval.evaluate`
+(deploy + validate + bench) and maps the `EvalOutcome` onto an `EvalResult`
+(`from_okbench` on success, or stage/error on failure). All the okbench mechanics
+live in `okeval`.
 > ⚠️ Gotcha (fixed): okbench's `--output` is resolved against its cwd
-> (OpenKernels). `out_dir` must be **absolute**, or okbench writes under
-> `OpenKernels/…` while anvil looks under `anvil/…` and every working kernel reads
-> as "compile failed". `cli.py` now `.resolve()`s the run dir.
+> (OpenKernels). `out_json` must be **absolute** (okeval `.resolve()`s it), or
+> okbench writes under `OpenKernels/…` while anvil looks under `anvil/…` and every
+> working kernel reads as "compile failed". `cli.py` also `.resolve()`s the run dir.
 
 ### `orchestrator.py` — the loop
 `run()`: for each iter — propose → evaluate → log → `_record` (archive) → track
@@ -78,11 +87,10 @@ A hand-written correct (slow) kernel string for `smoke`. Really test data living
 in the package.
 
 ## Known rough edges (optimization points)
-1. **Eval duplicated with forge.** `okbench_runner.py` (python) and forge's
-   `tools/bench.sh` (bash) both do deploy→okbench→parse → drift risk. Should be
-   one canonical eval that both use.
-2. **op→okbench-subcommand mapping duplicated** (here in `op.py`, again in
-   `bench.sh`).
+1. ~~Eval duplicated with forge.~~ **Fixed (Tier 2):** deploy→okbench→parse lives
+   once in `okeval.py`; `okbench_runner.py` and forge's `tools/bench.sh` both call it.
+2. ~~op→okbench-subcommand mapping duplicated.~~ **Fixed:** single
+   `OKBENCH_BENCH_CMD` in `okeval`; `op.py` imports it.
 3. **Prompt is hard-coded / not composable.** Injecting the forge `wiki/`+`skills/`
    knowledge needs a clean "extra context" hook in `_build_prompt`.
 4. **Config sprawl.** hardware/platform/arch/device/author/suite are threaded by
