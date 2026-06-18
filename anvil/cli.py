@@ -40,16 +40,35 @@ def _cmd_smoke(args):
         print("--- error ---\n" + res.error)
 
 
-def _cmd_run(args):
-    op = load_op(args.repo, args.op)
+def _run_dir(args, op) -> Path:
     # absolute: okbench runs with cwd=OpenKernels, so a relative --output would
     # land under the repo, not here, and we'd misread it as "compile failed".
-    run_dir = (Path(args.out_dir).expanduser() / f"{op.name}_{datetime.now():%Y%m%d_%H%M%S}").resolve()
+    return (Path(args.out_dir).expanduser() / f"{op.name}_{datetime.now():%Y%m%d_%H%M%S}").resolve()
+
+
+def _cmd_run(args):
+    op = load_op(args.repo, args.op)
+    run_dir = _run_dir(args, op)
     generator = make_generator(args.provider, args.model, inject_skill=args.inject_skill)
     report = Orchestrator(
         op, generator, _runner(args, op, out_dir=run_dir),
         variant_prefix=args.author, max_iters=args.max_iters,
         target_speedup=args.target_speedup, run_dir=run_dir,
+    ).run()
+    print(f"\n[anvil] artifacts archived in {run_dir}")
+    if report.best:
+        print(f"[anvil] best: {report.best.summary()}  (best.cu in run dir)")
+
+
+def _cmd_agent(args):
+    from .agent import AgentRunner          # local import: only agent mode needs openai tools
+    op = load_op(args.repo, args.op)
+    run_dir = _run_dir(args, op)
+    report = AgentRunner(
+        op, _runner(args, op, out_dir=run_dir),
+        model=args.model, max_attempts=args.max_attempts,
+        target_speedup=args.target_speedup, variant_prefix=args.author,
+        inject_skill=args.inject_skill, run_dir=run_dir,
     ).run()
     print(f"\n[anvil] artifacts archived in {run_dir}")
     if report.best:
@@ -85,6 +104,19 @@ def main():
     pr.add_argument("--inject-skill", action="store_true",
                     help="inject the distilled PTX GEMM skill into the system prompt (A/B test)")
     pr.set_defaults(func=_cmd_run)
+
+    # agent: Route-AVO-lite — model drives a bench_kernel tool loop (DeepSeek v1)
+    pa = sub.add_parser("agent", parents=[common],
+                        help="autonomous tool-loop agent (model compiles+iterates itself)")
+    pa.add_argument("--model", default=None, help="override the default DeepSeek model")
+    pa.add_argument("--max-attempts", type=int, default=8,
+                    help="budget of bench_kernel (compile+bench) calls the agent may make")
+    pa.add_argument("--target-speedup", type=float, default=1.0)
+    pa.add_argument("--out-dir", default="runs",
+                    help="archive each run under <out-dir>/<op>_<timestamp>/ (default: runs/)")
+    pa.add_argument("--inject-skill", action="store_true",
+                    help="inject the distilled PTX GEMM skill into the system prompt (A/B test)")
+    pa.set_defaults(func=_cmd_agent)
 
     args = p.parse_args()
     args.func(args)

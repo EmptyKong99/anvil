@@ -109,3 +109,47 @@ def build_feedback(history: list[EvalResult]) -> str:
 def _best(history: list[EvalResult]) -> EvalResult | None:
     correct = [h for h in history if h.correct and h.geomean_speedup]
     return max(correct, key=lambda h: h.geomean_speedup) if correct else None
+
+
+def feedback_for_result(result: EvalResult, *, best_geomean: float | None = None) -> str:
+    """Format ONE eval result the way it's handed back to the model — used both by
+    Route-B feedback and as the agent's `bench_kernel` tool result. Surfaces the
+    real nvcc error (already trimmed by okeval) / correctness failure / speedups."""
+    lines = [result.summary()]
+    if result.stage in ("validate", "compile") and result.error:
+        label = "Validator rejected it" if result.stage == "validate" else "nvcc / launch error"
+        lines.append(f"{label} — fix this exactly:\n{result.error}")
+    elif not result.correct:
+        lines.append("It compiled but was INCORRECT. Fix the math/indexing:\n" + (result.error or ""))
+        lines.append("Reminder: C = A[M,K] @ B[N,K]^T (row-major), fp32 accumulate.")
+    else:
+        rows = "\n".join(
+            f"  {p['name']}: {p['speedup_vs_ref']:.3f}x  ({p['pure_median_ms']:.3f} ms)"
+            for p in result.per_shape if p.get("speedup_vs_ref")
+        )
+        lines.append(f"CORRECT. Per-shape speedup vs reference:\n{rows}\n"
+                     f"geomean {result.geomean_speedup:.4f}x. Now make it faster — "
+                     f"attack the slowest shapes.")
+    if best_geomean is not None and (result.geomean_speedup or 0.0) < best_geomean:
+        lines.append(f"Your best correct kernel so far: geomean {best_geomean:.4f}x.")
+    return "\n".join(lines)
+
+
+# Appended to the user message in agent mode: tells the model it has hands and a
+# budget, and must iterate autonomously off what bench_kernel returns.
+AGENT_TASK = """
+
+You are running as an AUTONOMOUS agent. You have one tool, `bench_kernel`, which
+compiles your kernel.cu and benchmarks it on a real RTX 5090 via okbench, then
+returns the verdict: the actual nvcc compiler error if it fails to build, a
+correctness failure if the output is wrong, or the per-shape speedups vs the
+reference if it works.
+
+Work the problem yourself, without asking anything:
+  1. write a complete kernel.cu and call bench_kernel;
+  2. READ what it returns — a real error line, a wrong-result report, or speedups;
+  3. fix the exact error or optimize the slowest shapes, then call bench_kernel again.
+Correctness first (a fast wrong kernel scores 0), then push speed toward cuBLAS.
+
+You have a budget of {budget} bench_kernel calls. Do not stop early while you are
+still improving. When you are done (or out of budget), reply with one line."""

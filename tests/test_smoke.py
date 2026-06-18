@@ -3,9 +3,13 @@
 These run anywhere (incl. the Mac) and just verify the pieces wire together.
 The real end-to-end check is `python -m anvil.cli smoke` on the GPU server.
 """
+import json
+from types import SimpleNamespace
+
 from anvil.candidate import Candidate, EvalResult
 from anvil.baselines import SMOKE_KERNELS
 from anvil.okeval import trim_error
+from anvil.agent import AgentRunner
 
 
 def test_baseline_kernel_has_entry_symbol():
@@ -85,3 +89,65 @@ def test_trim_error_surfaces_traceback_when_no_compiler_error():
     assert "KEY COMPILER ERRORS" not in out
     assert "okbench: deploying submission" in out          # head preserved
     assert "[middle trimmed]" in out
+
+
+# --- agent (Route-AVO-lite) tool-loop, offline (fake client + fake runner) ----
+
+def _fake_op():
+    return SimpleNamespace(
+        name="gemm_bf16_nt", description="C=A·Bᵀ", entry_symbol="sym",
+        atol=1e-2, rtol=1e-2, shapes=[{"name": "s1", "m": 16, "n": 16, "k": 16}],
+        interface_h="void sym();", reference_src="def ref(): pass")
+
+
+def _correct_eval(cand):
+    return EvalResult.from_okbench(cand, {"shapes": [
+        {"name": "s1", "correct": True, "pure_over_reference": 2.0,   # 2x slower ref -> 0.5x
+         "pure_median_ms": 0.10, "correctness": {"max_abs": 0.0}}]})
+
+
+class _FakeRunner:
+    def __init__(self): self.calls = []
+    def evaluate(self, cand, variant):
+        self.calls.append(variant)
+        return _correct_eval(cand)
+
+
+def _scripted_client(messages):
+    """OpenAI-compat client stand-in: returns the scripted assistant messages in order."""
+    seq = iter(messages)
+    def create(**_kw):
+        return SimpleNamespace(choices=[SimpleNamespace(message=next(seq))])
+    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+
+def _tool_call(cid, **args):
+    return SimpleNamespace(id=cid, function=SimpleNamespace(
+        name="bench_kernel", arguments=json.dumps(args)))
+
+
+def test_agent_loop_drives_bench_tool_then_stops_and_tracks_best():
+    # turn 1: model calls bench_kernel; turn 2: model replies without a tool call -> stop.
+    client = _scripted_client([
+        SimpleNamespace(content="trying v1",
+                        tool_calls=[_tool_call("c1", kernel_cu="#include <x>\nvoid sym(){}", notes="v1")]),
+        SimpleNamespace(content="done, 0.5x", tool_calls=None),
+    ])
+    runner = _FakeRunner()
+    report = AgentRunner(_fake_op(), runner, client=client, max_attempts=4, verbose=False).run()
+
+    assert runner.calls == ["gucheng_a01"]                 # exactly one bench happened
+    assert report.best is not None
+    assert abs(report.best.geomean_speedup - 0.5) < 1e-9   # best tracked from the tool result
+    assert len(report.history) == 1
+
+
+def test_agent_loop_respects_attempt_budget():
+    # model keeps calling bench_kernel forever; the runner must be capped at max_attempts.
+    forever = [SimpleNamespace(content="again",
+                               tool_calls=[_tool_call(f"c{i}", kernel_cu="#include <x>", notes=str(i))])
+               for i in range(10)]
+    runner = _FakeRunner()
+    AgentRunner(_fake_op(), runner, client=_scripted_client(forever),
+                max_attempts=3, target_speedup=99.0, verbose=False).run()
+    assert len(runner.calls) == 3                            # budget enforced
