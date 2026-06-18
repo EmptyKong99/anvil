@@ -40,3 +40,45 @@ skill best note 原话:"用裸 ldmatrix 和 mma.sync **遵循 expert recipe**,B 
 nvcc 真报错而不是 okbench traceback);③ 之后再扩 skill 内容并重测。
 
 **产物:** 服务器 `runs_ab/{base,skill}/gemm_bf16_nt_20260617_161943/`(kernel + results.jsonl + best.cu)。
+
+---
+
+## EXP-002 · Agent(tool-loop) 上的 PTX skill 消融(2026-06-18)
+
+**问题:** 把 anvil 从 Route B(一次性出码)换成 **Route-AVO-lite agent**(模型自带
+`bench_kernel` 工具,自己编译→看真报错→改→迭代),再做同一个 skill 消融。EXP-001
+的弱 claim("给没手、没知识的模型喂 PTX 配方")升级为强 claim:**给一个能自主迭代到
+天花板的 agent 注入 skill,还能不能更高/更稳。**
+
+**设置:** `anvil agent`(本会话新建,见 `agent.py`),DeepSeek v4-pro,`--max-attempts 12`,
+gemm_bf16_nt / required_5,RTX 5090。**两臂各 n=3**:base=no-skill@GPU6,
+skill=`--inject-skill`@GPU7,**唯一变量仍是 skill 注入**。skill 内容同 EXP-001
+(mma.sync.m16n8k16 + ldmatrix 配方 + `.trans` 坑,源自我们 v7/v8 实测)。
+
+**结果(每 run 的 best geomean vs cuBLAS):**
+
+| | rep1 | rep2 | rep3 | 编译失败(/12) | 中位数 |
+|---|---|---|---|---|---|
+| base(no-skill) | 0.783 | 0.113 | 0.060 | 3 / 5 / 9 | 0.113 |
+| **skill** | 0.746 | **0.883** | 0.060 | 0 / 2 / 6 | **0.746** |
+
+**结论:**
+1. **Route-AVO-lite 成立、且明显强于 Route B:** agent 真的"用手"——会读真报错、修
+   正确性 bug(验证 run 里 attempt1→2 自己诊断出索引 double-count 并改对)、爬性能。
+   EXP-001 的 Route B 同模型只到 ~0.06–0.58 且 5/6 失败;agent 两臂都有 run 爬到 ~0.78–0.88。
+2. **skill 的两个正向作用(机制可见):**(a)**推上张量核**——skill rep2 自主爬到
+   **0.883 ≈ forge 当年 wmma 天花板**,rep1 稳到 0.746 且 0 编译失败;(b)**减少
+   thrashing**——编译失败 base 17/36 vs skill 8/36(≈腰斩),正是 skill 给对 mma/ldmatrix
+   配方 + 避 `.trans` 的预期收益。中位数 base 0.113 vs skill 0.746。
+3. **⚠️ 仍是强 suggestive,非定论:** n=3、方差大,**两臂各有一个 0.06 的 dud**
+   (base rep3 / skill rep3 都在 wmma 编译错上栽了 6–9 次、没爬起来)。要坐实需加 rep。
+
+**观察到的两个 agent 失败模式(下一步要治):**
+- **过峰回退:** base rep1 在 a5 摸到 0.783 后自己越改越烂(0.618→0.108)——agent 从
+  "上一版"接着改、不回退到 best。反馈已带 best-so-far,但需更强的"低于最好版就回退"约束。
+- **wmma 编译 thrashing:** dud run 把预算烧在张量核 API 编译错上。skill 减轻但未根除。
+
+**下一步:** ① 加 rep(n≥5)把 dud 的影响摊平、给出分布;② 治"过峰回退"(显式 revert-to-best);
+③ held-out shape 查过拟合;④ 之后再上 Claude agent 臂。
+
+**产物:** 服务器 `runs_exp002/{base,skill}/gemm_bf16_nt_*/`(每 attempt kernel + results.jsonl + best.cu + summary.json)。
