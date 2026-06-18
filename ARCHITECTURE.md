@@ -76,10 +76,21 @@ best → stop at `target_speedup`. `_record`/`_finalize` write the run archive:
 `iterNN_<variant>.cu`, `results.jsonl`, `best.cu`, `summary.json` under `run_dir`.
 `results.jsonl` is the real per-run record (run.log is just redundant console echo).
 
+### `agent.py` — the loop, model-driven (Route-AVO-lite)
+The agent alternative to `orchestrator.py`: instead of the python deciding each
+step, the **model drives**. `AgentRunner.run()` runs an OpenAI-compat
+function-calling loop where the model's one tool, `bench_kernel(kernel_cu, notes)`,
+calls the same `OKBenchRunner.evaluate` and hands back `prompts.feedback_for_result`
+(the real nvcc error / correctness / speedups). The model reads it and calls again,
+budgeted by `--max-attempts`; we track best + archive each attempt
+(`attemptNN_<variant>.cu`, same format as orchestrator). The OpenAI client is
+injectable so the loop is unit-tested offline (`tests/test_smoke.py`). v1 backs
+DeepSeek; Claude tool-loop is deferred.
+
 ### `cli.py` — entrypoint
-`smoke` (HumanGenerator, prove the pipeline) and `run` (full loop). Builds an
-**absolute** timestamped `run_dir = <out-dir>/<op>_<ts>/`, wires generator+runner+
-orchestrator. Flags: `--provider/--model/--max-iters/--target-speedup/--out-dir`
+`smoke` (HumanGenerator, prove the pipeline), `run` (Route-B loop) and `agent`
+(model-driven tool loop). Builds an **absolute** timestamped
+`run_dir = <out-dir>/<op>_<ts>/`, wires generator/agent + runner. Flags: `--provider/--model/--max-iters/--target-speedup/--out-dir`
 + common `--op/--repo/--hardware/--platform/--arch/--device/--author/--suite`.
 
 ### `baselines.py` — smoke data
@@ -93,11 +104,15 @@ in the package.
    the Tier 3 merge dissolves the duplication.
 2. ~~op→okbench-subcommand mapping duplicated within anvil.~~ **Fixed:** single
    `OKBENCH_BENCH_CMD` in `okeval`; `op.py` imports it. (forge's copy has its own.)
-3. **Prompt is hard-coded / not composable.** Injecting the forge `wiki/`+`skills/`
-   knowledge needs a clean "extra context" hook in `_build_prompt`.
+3. ~~Prompt is hard-coded / not composable.~~ **Partly fixed:** `inject_skill`
+   prepends `PTX_GEMM_SKILL` to the system prompt (Route B + agent). A general
+   "extra context" hook for arbitrary `wiki/`+`skills/` injection is still TODO.
 4. **Config sprawl.** hardware/platform/arch/device/author/suite are threaded by
    hand cli→runner; group into a `Target`/`RunConfig` dataclass.
 5. **`baselines.py` is data in the package** — could move to `tests/`/a data dir.
 6. **Tests are smoke-only** (offline plumbing); no unit tests for the parsers/loop.
-7. **Feedback truncates errors** to ~2–3K chars — the model may not see the real
-   nvcc error; consider smarter (head+tail) truncation or full errors.
+7. ~~Feedback truncates errors so the model may not see the real nvcc error.~~
+   **Fixed:** `okeval.trim_error` unwraps okbench's `RuntimeError(json)` to recover
+   the real nvcc stderr, always hoists `error:`/`ptxas` lines to the top, and
+   head+tail trims (was a blind tail slice that fed back okbench's traceback).
+   Verified on the 5090 end-to-end.
