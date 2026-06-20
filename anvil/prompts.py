@@ -65,11 +65,18 @@ register-resident f32 accumulators, ldmatrix feeding mma.sync per 16-wide k subs
 software-pipeline (issue both k-substep loads, then the mma) for a final ~1pp."""
 
 
+def _fmt_shape(s: dict) -> str:
+    # op-agnostic: print every dim key except the name (gemm has m/n/k; flash
+    # attention has B/H/S_q/S_kv/D/causal; etc.)
+    dims = ", ".join(f"{k}={v}" for k, v in s.items() if k != "name")
+    return f"  {s.get('name', '?')}: {dims}"
+
+
 def build_user(op: Op) -> str:
     return (
         f"Operator: {op.name}\n{op.description}\n\n"
-        f"Target shapes (all must pass), name: m,n,k =\n" +
-        "\n".join(f"  {s['name']}: {s['m']},{s['n']},{s['k']}" for s in op.shapes) +
+        f"Target shapes (all must pass):\n" +
+        "\n".join(_fmt_shape(s) for s in op.shapes) +
         f"\n\nC ABI you must implement (ops/{op.name}/interface.h):\n"
         f"```c\n{op.interface_h}\n```\n\n"
         f"Reference (ground truth the kernel is compared against):\n"
