@@ -1,6 +1,7 @@
 # anvil 实验记录
 
 技术性实验日志(跟代码放一起)。人看的周报在 `PhD/Project/KernelAgent/`。
+**逐 attempt 明细矩阵见 [`RESULTS.md`](RESULTS.md)**(由 `collect_results.py` 从各 run 的 results.jsonl 生成);本文件只放叙事 + 汇总。
 
 ---
 
