@@ -15,6 +15,15 @@ from .op import Op
 from .candidate import Candidate, EvalResult
 
 
+# Ops whose okbench `correct` gate is unsound → judge correctness by a fp32-truth
+# field in the shape's `correctness` dict instead. flash_attention's default gate
+# bit-matches cuDNN's bf16 rounding at atol=0.002 (< 1 bf16 ULP) and rejects
+# correct kernels; gate on the fp32-math reference (atol 0.008) instead.
+_CORRECT_FIELD_BY_OP = {
+    "flash_attention_bf16_fwd_bhsd": "sampled_vs_fp32_math_allclose",
+}
+
+
 class OKBenchRunner:
     def __init__(self, op: Op, *, hardware: str = "5090",
                  platform: str = "sm120_rtx5090", arch: str = "sm_120a",
@@ -46,4 +55,5 @@ class OKBenchRunner:
         )
         if not outcome.ok:
             return EvalResult(candidate, stage=outcome.stage, error=outcome.error)
-        return EvalResult.from_okbench(candidate, outcome.result)
+        return EvalResult.from_okbench(candidate, outcome.result,
+                                       correct_field=_CORRECT_FIELD_BY_OP.get(self.op.name))

@@ -220,3 +220,20 @@ def test_agent_injects_extra_system_bundle():
                      extra_system="ZZZ_BUNDLE_MARKER", verbose=False)
     sys_msgs = [m["content"] for m in ar._messages() if m["role"] == "system"]
     assert any("ZZZ_BUNDLE_MARKER" in s for s in sys_msgs)
+
+
+def test_from_okbench_correct_field_overrides_gate():
+    # flash_attention's default `correct` bit-matches cuDNN (too tight); we gate on
+    # the fp32-math field instead. Default unchanged; override flips a fp32-correct
+    # but cuDNN-mismatched shape to correct.
+    res = {"shapes": [
+        {"name": "fa0", "correct": False, "pure_over_reference": 60.0,
+         "pure_median_ms": 3.3, "correctness": {
+             "allclose_vs_cudnn": 0, "sampled_vs_fp32_math_allclose": 1,
+             "max_abs_vs_cudnn": 0.0156, "sampled_max_abs_vs_fp32": 0.0027}},
+    ]}
+    assert EvalResult.from_okbench(Candidate("x"), res).correct is False
+    f = EvalResult.from_okbench(Candidate("x"), res,
+                                correct_field="sampled_vs_fp32_math_allclose")
+    assert f.correct is True
+    assert f.per_shape[0]["max_abs"] == 0.0027     # meaningful max_abs fallback
