@@ -7,7 +7,9 @@ Rows = step (Route-B iter / agent attempt). Columns = runs (arm + rep). Cell:
   xW        compiled but wrong result
   .         no attempt at that step
 Reads runs_exp*/<arm>/<run-ts>/results.jsonl (reps = run dirs in time order).
-Regenerate as new experiments land:  python collect_results.py [root]
+One-shot generator: run it, then paste each experiment's matrix into the matching
+section of EXPERIMENTS.md (completed experiments are frozen — no re-gen needed):
+    python collect_results.py [root]
 """
 from __future__ import annotations
 
