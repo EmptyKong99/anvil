@@ -3,7 +3,7 @@
 
 Rows = runs (arm + rep) — each row is one run's trajectory read left→right.
 Columns = step (Route-B iter / agent attempt). Cell:
-  <number>  geomean speedup vs cuBLAS (correct kernel)
+  <number>  geomean speedup vs cuBLAS as a percent (100 = parity); bold = row max
   xC        build failed (compile / validate)
   xW        compiled but wrong result
   .         no attempt at that step
@@ -20,21 +20,24 @@ import os
 import sys
 
 
-def cell(r: dict) -> str:
+def cell(r: dict) -> tuple[str, float | None]:
+    """(display string, numeric speedup or None) — None marks a non-number cell
+    so the row-max bolding skips failures."""
     if r.get("correct") and r.get("geomean_speedup") is not None:
-        return f"{r['geomean_speedup']:.3f}"
+        v = r["geomean_speedup"]
+        return (f"{v * 100:.1f}", v)            # percent of cuBLAS, 1 decimal
     if r.get("stage") in ("compile", "validate"):
-        return "xC"
+        return ("xC", None)
     if r.get("stage") == "bench":
-        return "xW"
-    return "x"
+        return ("xW", None)
+    return ("x", None)
 
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     out = []
-    out.append("> 格子:数字=加速比(geomean vs cuBLAS,正确) · `xC`=编译/校验失败 · "
-               "`xW`=结果错 · `.`=该步未跑。列名 b=base(no-skill)/s=skill,后接 rep 号。\n")
+    out.append("> 格子:数字=对 cuBLAS 的百分比(100=持平),**加粗=该 run 峰值** · "
+               "`xC`=编译/校验失败 · `xW`=结果错 · `.`=未跑。行=run(base/skill + rep 号),列=step。\n")
     for exp_dir in sorted(glob.glob(os.path.join(root, "runs_exp*/"))):
         exp = os.path.basename(exp_dir.rstrip("/")).replace("runs_", "")
         cols, grid, steps = [], {}, set()
@@ -45,7 +48,7 @@ def main():
                 if not os.path.exists(rj):
                     continue
                 ci = len(cols)
-                cols.append(f"{arm[:1]}{rep}")
+                cols.append(f"{arm}-{rep}")
                 for line in open(rj):
                     if not line.strip():
                         continue
@@ -60,7 +63,10 @@ def main():
         out.append("| run | " + " | ".join(str(s) for s in ss) + " |")
         out.append("|" + "---|" * (len(ss) + 1))
         for ci, name in enumerate(cols):
-            cells = [grid.get((ci, s), ".") for s in ss]
+            pairs = [grid.get((ci, s), (".", None)) for s in ss]
+            nums = [(i, p[1]) for i, p in enumerate(pairs) if p[1] is not None]
+            best_i = max(nums, key=lambda t: t[1])[0] if nums else -1   # bold row max
+            cells = [f"**{t}**" if i == best_i else t for i, (t, _) in enumerate(pairs)]
             out.append(f"| {name} | " + " | ".join(cells) + " |")
         out.append("")
     print("\n".join(out))
