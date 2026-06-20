@@ -31,6 +31,40 @@ otherwise a well-tiled SIMT kernel is an acceptable first step.
 The kernel.cu must compile and run as-is."""
 
 
+# Distilled PTX skill, injected into the system prompt only when --inject-skill.
+# Source (provenance): our OWN kernels gemm_bf16_nt v7_mma.cu / v8_pipe.cu, verified
+# on RTX 5090 (sm_120) by okbench at ~0.92x cuBLAS. This is distilled from real
+# practice + measurement, NOT from the model's latent knowledge. A/B target.
+PTX_GEMM_SKILL = """\
+EXPERT PTX RECIPE for fast BF16 GEMM on sm_120 (distilled from our own kernels,
+measured on RTX 5090 via okbench: the wmma path plateaus ~0.88x cuBLAS; raw
+mma.sync is REQUIRED to beat it — our v8 reaches ~0.92x).
+
+Instructions (sm_80+, valid on sm_120 — NOT wgmma / tcgen05):
+  mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {d0..d3},{a0..a3},{b0,b1},{c0..c3};
+  ldmatrix.sync.aligned.m8n8.x4.shared.b16  {r0..r3},[addr];  // A 16x16
+  ldmatrix.sync.aligned.m8n8.x2.shared.b16  {r0,r1},[addr];   // B 16x8
+Per thread: A=4xb32(8 bf16), B=2xb32(4 bf16), C/D=4xf32. addr = u32 from
+__cvta_generic_to_shared(ptr) (a SHARED address).
+
+C/D accumulator layout for the epilogue store (group=lane/4, tidg=lane%4):
+  d0->(group,2*tidg) d1->(group,2*tidg+1) d2->(group+8,2*tidg) d3->(group+8,2*tidg+1)
+
+ldmatrix addressing (each lane supplies one 8-wide row of an 8x8 tile):
+  A row-major MxK in shared: addr=&As[rowbase+lane%16][k+(lane/16)*8]
+  B col-major KxN in shared:  addr=&Bs[nbase+lane%8][k+((lane/8)&1)*8]
+
+CRITICAL CORRECTNESS GOTCHA (cost us a debug iteration): for NT GEMM C=A·B^T,
+input B[N,K] row-major stored as Bs[n][k] is ALREADY column-major K×N — exactly
+what the .col B operand wants. Load it with PLAIN ldmatrix, NOT ldmatrix.trans.
+.trans compiles and runs fast but is NUMERICALLY WRONG. (Use .trans only if B is
+stored row-major N×K.)
+
+Recipe that worked: 128x128 tile, 8 warps, cp.async double-buffered global->shared,
+register-resident f32 accumulators, ldmatrix feeding mma.sync per 16-wide k substep;
+software-pipeline (issue both k-substep loads, then the mma) for a final ~1pp."""
+
+
 def build_user(op: Op) -> str:
     return (
         f"Operator: {op.name}\n{op.description}\n\n"
@@ -75,3 +109,79 @@ def build_feedback(history: list[EvalResult]) -> str:
 def _best(history: list[EvalResult]) -> EvalResult | None:
     correct = [h for h in history if h.correct and h.geomean_speedup]
     return max(correct, key=lambda h: h.geomean_speedup) if correct else None
+
+
+def feedback_for_result(result: EvalResult, *, best_geomean: float | None = None) -> str:
+    """Format ONE eval result the way it's handed back to the model — used both by
+    Route-B feedback and as the agent's `bench_kernel` tool result. Surfaces the
+    real nvcc error (already trimmed by okeval) / correctness failure / speedups."""
+    lines = [result.summary()]
+    if result.stage in ("validate", "compile") and result.error:
+        label = "Validator rejected it" if result.stage == "validate" else "nvcc / launch error"
+        lines.append(f"{label} — fix this exactly:\n{result.error}")
+    elif not result.correct:
+        lines.append("It compiled but was INCORRECT. Fix the math/indexing:\n" + (result.error or ""))
+        lines.append("Reminder: C = A[M,K] @ B[N,K]^T (row-major), fp32 accumulate.")
+    else:
+        rows = "\n".join(
+            f"  {p['name']}: {p['speedup_vs_ref']:.3f}x  ({p['pure_median_ms']:.3f} ms)"
+            for p in result.per_shape if p.get("speedup_vs_ref")
+        )
+        lines.append(f"CORRECT. Per-shape speedup vs reference:\n{rows}\n"
+                     f"geomean {result.geomean_speedup:.4f}x. Now make it faster — "
+                     f"attack the slowest shapes.")
+    if best_geomean is not None and (result.geomean_speedup or 0.0) < best_geomean:
+        lines.append(f"Your best correct kernel so far: geomean {best_geomean:.4f}x.")
+    return "\n".join(lines)
+
+
+# How many consecutive build/correctness failures before the agent gets a
+# "stop thrashing" nudge.
+STUCK_THRESHOLD = 3
+
+
+def agent_feedback(result: EvalResult, *, best: EvalResult | None, best_attempt: int,
+                   improved: bool, consec_fail: int) -> str:
+    """The agent's bench_kernel tool result: per-result verdict + two nudges that
+    curb the observed failure modes —
+      • revert-to-best: if this attempt is below the best so far, tell the model to
+        go back to that best kernel (still in its chat history) and change ONE thing,
+        instead of compounding edits on a regressed/broken attempt;
+      • stuck-handling: after STUCK_THRESHOLD consecutive failures, tell it to stop
+        fighting the same API and lock in a correct fallback first.
+    """
+    parts = [feedback_for_result(
+        result, best_geomean=best.geomean_speedup if best else None)]
+    if best is not None and not improved:                 # regressed below best
+        note = (best.candidate.notes or "").strip()
+        note = f": \"{note}\"" if note else ""
+        parts.append(
+            f"↩️ This is BELOW your best (geomean {best.geomean_speedup:.4f}× "
+            f"at attempt {best_attempt}{note}). Don't keep editing THIS attempt — go back "
+            f"to that best kernel and change ONE thing.")
+    if consec_fail >= STUCK_THRESHOLD:
+        parts.append(
+            f"⚠️ {consec_fail} attempts in a row failed. Stop fighting the same "
+            f"API — either fix the EXACT signature okbench reported, or fall back to a "
+            f"known-good tiled SIMT kernel to lock in correctness first, then optimize.")
+    return "\n\n".join(parts)
+
+
+# Appended to the user message in agent mode: tells the model it has hands and a
+# budget, and must iterate autonomously off what bench_kernel returns.
+AGENT_TASK = """
+
+You are running as an AUTONOMOUS agent. You have one tool, `bench_kernel`, which
+compiles your kernel.cu and benchmarks it on a real RTX 5090 via okbench, then
+returns the verdict: the actual nvcc compiler error if it fails to build, a
+correctness failure if the output is wrong, or the per-shape speedups vs the
+reference if it works.
+
+Work the problem yourself, without asking anything:
+  1. write a complete kernel.cu and call bench_kernel;
+  2. READ what it returns — a real error line, a wrong-result report, or speedups;
+  3. fix the exact error or optimize the slowest shapes, then call bench_kernel again.
+Correctness first (a fast wrong kernel scores 0), then push speed toward cuBLAS.
+
+You have a budget of {budget} bench_kernel calls. Do not stop early while you are
+still improving. When you are done (or out of budget), reply with one line."""
