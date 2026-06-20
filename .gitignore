@@ -25,3 +25,6 @@ env/
 # anvil run artifacts (run dirs: runs/, runs_ab/, runs_exp002/, … — kept locally
 # + on the server as experiment evidence; the analysis lives in EXPERIMENTS.md)
 runs*/
+
+# logs (run logs live inside runs*/; loose logs are scratch)
+*.log
