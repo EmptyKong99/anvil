@@ -142,6 +142,35 @@ def test_agent_loop_drives_bench_tool_then_stops_and_tracks_best():
     assert len(report.history) == 1
 
 
+def _eval_speedup(over_ref):
+    return EvalResult.from_okbench(Candidate(kernel_cu="x"), {"shapes": [
+        {"name": "s1", "correct": True, "pure_over_reference": over_ref,
+         "pure_median_ms": 0.1, "correctness": {"max_abs": 0.0}}]})
+
+
+def test_agent_feedback_reverts_to_best_on_regression():
+    from anvil import prompts
+    best = _eval_speedup(2.0)            # 0.5x
+    worse = _eval_speedup(4.0)           # 0.25x — a regression
+    fb = prompts.agent_feedback(worse, best=best, best_attempt=3, improved=False, consec_fail=0)
+    assert "BELOW your best" in fb and "attempt 3" in fb
+
+
+def test_agent_feedback_no_revert_when_improved():
+    from anvil import prompts
+    r = _eval_speedup(2.0)
+    fb = prompts.agent_feedback(r, best=r, best_attempt=1, improved=True, consec_fail=0)
+    assert "BELOW your best" not in fb
+
+
+def test_agent_feedback_stuck_nudge_after_threshold():
+    from anvil import prompts
+    fail = EvalResult(Candidate(kernel_cu="x"), stage="compile", error="error: boom")
+    fb = prompts.agent_feedback(fail, best=None, best_attempt=0, improved=False,
+                                consec_fail=prompts.STUCK_THRESHOLD)
+    assert "in a row failed" in fb
+
+
 def test_agent_loop_respects_attempt_budget():
     # model keeps calling bench_kernel forever; the runner must be capped at max_attempts.
     forever = [SimpleNamespace(content="again",

@@ -118,6 +118,8 @@ class AgentRunner:
         messages = self._messages()
         history: list[EvalResult] = []
         best: EvalResult | None = None
+        best_attempt = 0
+        consec_fail = 0
         n_bench = 0
         # +3 turns of slack so the model can reason/finalize around its bench calls.
         for _turn in range(self.max_attempts + 3):
@@ -137,14 +139,21 @@ class AgentRunner:
                 if n_bench >= self.max_attempts:
                     messages.append(_tool_result(tc.id, "Budget exhausted; no more bench_kernel calls."))
                     continue
-                content = self._handle_bench(tc, n_bench + 1, history)
-                if content is not None:                       # a real bench happened
-                    n_bench += 1
-                    best = _better(best, history[-1])
-                    messages.append(_tool_result(tc.id, content))
-                else:                                          # malformed call
+                result = self._handle_bench(tc, n_bench + 1, history)
+                if result is None:                            # malformed call
                     messages.append(_tool_result(tc.id, "Call rejected: send a `bench_kernel` "
                                                           "tool call with a complete `kernel_cu` string."))
+                    continue
+                n_bench += 1
+                consec_fail = 0 if result.correct else consec_fail + 1
+                improved = (result.correct and result.geomean_speedup is not None
+                            and (best is None or best.geomean_speedup is None
+                                 or result.geomean_speedup > best.geomean_speedup))
+                if improved:
+                    best, best_attempt = result, n_bench
+                messages.append(_tool_result(tc.id, prompts.agent_feedback(
+                    result, best=best, best_attempt=best_attempt,
+                    improved=improved, consec_fail=consec_fail)))
             if best and best.geomean_speedup and best.geomean_speedup >= self.target_speedup:
                 self._log(f"target {self.target_speedup:.2f}x reached — stopping")
                 break
@@ -156,7 +165,9 @@ class AgentRunner:
         self._finalize(best, history)
         return RunReport(best=best, history=history)
 
-    def _handle_bench(self, tc, attempt: int, history: list[EvalResult]) -> str | None:
+    def _handle_bench(self, tc, attempt: int, history: list[EvalResult]) -> EvalResult | None:
+        """Eval + archive one bench_kernel call; return the EvalResult (None if the
+        call is malformed). The loop builds the tool-result feedback from it."""
         if tc.function.name != "bench_kernel":
             return None
         try:
@@ -173,9 +184,7 @@ class AgentRunner:
         history.append(result)
         self._log(f"attempt {attempt} [{variant}]: {result.summary()}")
         self._record(attempt, variant, result)
-        prev_best = _better(None, *history[:-1])
-        return prompts.feedback_for_result(
-            result, best_geomean=prev_best.geomean_speedup if prev_best else None)
+        return result
 
     # --- archiving (mirrors orchestrator's format: attempt == iter) ----------
 
@@ -206,13 +215,3 @@ class AgentRunner:
 
 def _tool_result(tool_call_id: str, content: str) -> dict:
     return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
-
-
-def _better(current: EvalResult | None, *results: EvalResult) -> EvalResult | None:
-    """Return whichever of current + results has the highest correct geomean."""
-    best = current
-    for r in results:
-        if r is not None and r.correct and r.geomean_speedup is not None:
-            if best is None or best.geomean_speedup is None or r.geomean_speedup > best.geomean_speedup:
-                best = r
-    return best

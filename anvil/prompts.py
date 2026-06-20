@@ -135,6 +135,38 @@ def feedback_for_result(result: EvalResult, *, best_geomean: float | None = None
     return "\n".join(lines)
 
 
+# How many consecutive build/correctness failures before the agent gets a
+# "stop thrashing" nudge.
+STUCK_THRESHOLD = 3
+
+
+def agent_feedback(result: EvalResult, *, best: EvalResult | None, best_attempt: int,
+                   improved: bool, consec_fail: int) -> str:
+    """The agent's bench_kernel tool result: per-result verdict + two nudges that
+    curb the observed failure modes —
+      • revert-to-best: if this attempt is below the best so far, tell the model to
+        go back to that best kernel (still in its chat history) and change ONE thing,
+        instead of compounding edits on a regressed/broken attempt;
+      • stuck-handling: after STUCK_THRESHOLD consecutive failures, tell it to stop
+        fighting the same API and lock in a correct fallback first.
+    """
+    parts = [feedback_for_result(
+        result, best_geomean=best.geomean_speedup if best else None)]
+    if best is not None and not improved:                 # regressed below best
+        note = (best.candidate.notes or "").strip()
+        note = f": \"{note}\"" if note else ""
+        parts.append(
+            f"↩️ This is BELOW your best (geomean {best.geomean_speedup:.4f}× "
+            f"at attempt {best_attempt}{note}). Don't keep editing THIS attempt — go back "
+            f"to that best kernel and change ONE thing.")
+    if consec_fail >= STUCK_THRESHOLD:
+        parts.append(
+            f"⚠️ {consec_fail} attempts in a row failed. Stop fighting the same "
+            f"API — either fix the EXACT signature okbench reported, or fall back to a "
+            f"known-good tiled SIMT kernel to lock in correctness first, then optimize.")
+    return "\n\n".join(parts)
+
+
 # Appended to the user message in agent mode: tells the model it has hands and a
 # budget, and must iterate autonomously off what bench_kernel returns.
 AGENT_TASK = """
