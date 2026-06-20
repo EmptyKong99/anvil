@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Render each experiment as a compact attempt × run markdown matrix.
+"""Render each experiment as a compact run × attempt markdown matrix.
 
-Rows = step (Route-B iter / agent attempt). Columns = runs (arm + rep). Cell:
+Rows = runs (arm + rep) — each row is one run's trajectory read left→right.
+Columns = step (Route-B iter / agent attempt). Cell:
   <number>  geomean speedup vs cuBLAS (correct kernel)
   xC        build failed (compile / validate)
   xW        compiled but wrong result
@@ -55,11 +56,12 @@ def main():
         if not cols:
             continue
         out.append(f"### {exp}")
-        out.append("| step | " + " | ".join(cols) + " |")
-        out.append("|" + "---|" * (len(cols) + 1))
-        for step in sorted(steps):
-            cells = [grid.get((ci, step), ".") for ci in range(len(cols))]
-            out.append(f"| {step} | " + " | ".join(cells) + " |")
+        ss = sorted(steps)
+        out.append("| run | " + " | ".join(str(s) for s in ss) + " |")
+        out.append("|" + "---|" * (len(ss) + 1))
+        for ci, name in enumerate(cols):
+            cells = [grid.get((ci, s), ".") for s in ss]
+            out.append(f"| {name} | " + " | ".join(cells) + " |")
         out.append("")
     print("\n".join(out))
 
