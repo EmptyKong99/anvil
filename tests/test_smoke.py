@@ -10,6 +10,7 @@ from anvil.candidate import Candidate, EvalResult
 from anvil.baselines import SMOKE_KERNELS
 from anvil.okeval import trim_error
 from anvil.agent import AgentRunner
+from anvil import wiki
 
 
 def test_baseline_kernel_has_entry_symbol():
@@ -180,3 +181,42 @@ def test_agent_loop_respects_attempt_budget():
     AgentRunner(_fake_op(), runner, client=_scripted_client(forever),
                 max_attempts=3, target_speedup=99.0, verbose=False).run()
     assert len(runner.calls) == 3                            # budget enforced
+
+
+def _make_fake_wiki(tmp_path):
+    layout = {"facts": 2, "heuristics": 1, "menu": 1}
+    for sub, n in layout.items():
+        d = tmp_path / sub
+        d.mkdir()
+        for i in range(n):
+            (d / f"{i}.md").write_text(
+                f"# card {sub}{i}\nbody with a [[link]] inside\n## Cross-refs\n- drop me\n")
+    return tmp_path
+
+
+def test_wiki_bundle_levels_are_cumulative_and_cleaned(tmp_path):
+    w = _make_fake_wiki(tmp_path)
+    assert wiki.load_bundle("none", w) == ""
+    facts = wiki.load_bundle("facts", w)
+    heur = wiki.load_bundle("heuristics", w)
+    full = wiki.load_bundle("full", w)
+    assert len(facts) < len(heur) < len(full)          # each layer adds content
+    assert full.count("=====") // 2 == 4               # 2 facts + 1 heuristic + 1 menu
+    assert "[[" not in full and "Cross-refs" not in full   # wiki machinery stripped
+    assert "body with a link inside" in full           # link brackets removed, text kept
+
+
+def test_wiki_unknown_level_raises():
+    try:
+        wiki.load_bundle("bogus", ".")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_agent_injects_extra_system_bundle():
+    client = _scripted_client([SimpleNamespace(content="x", tool_calls=None)])
+    ar = AgentRunner(_fake_op(), _FakeRunner(), client=client,
+                     extra_system="ZZZ_BUNDLE_MARKER", verbose=False)
+    sys_msgs = [m["content"] for m in ar._messages() if m["role"] == "system"]
+    assert any("ZZZ_BUNDLE_MARKER" in s for s in sys_msgs)

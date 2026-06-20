@@ -18,6 +18,16 @@ from .op import load_op
 from .okbench_runner import OKBenchRunner
 from .generator import HumanGenerator, make_generator
 from .orchestrator import Orchestrator
+from . import wiki
+
+
+def _skill_bundle(args) -> str:
+    """Assemble the injected knowledge bundle. --skill-level (layered wiki cards)
+    wins; else the legacy --inject-skill boolean; else nothing."""
+    level = getattr(args, "skill_level", "none")
+    if level and level != "none":
+        return wiki.load_bundle(level, getattr(args, "wiki_dir", None))
+    return ""  # _cmd_* pass inject_skill through for the legacy path
 
 
 def _runner(args, op, out_dir: Path | None = None) -> OKBenchRunner:
@@ -49,7 +59,9 @@ def _run_dir(args, op) -> Path:
 def _cmd_run(args):
     op = load_op(args.repo, args.op)
     run_dir = _run_dir(args, op)
-    generator = make_generator(args.provider, args.model, inject_skill=args.inject_skill)
+    generator = make_generator(args.provider, args.model,
+                               inject_skill=args.inject_skill,
+                               extra_system=_skill_bundle(args))
     report = Orchestrator(
         op, generator, _runner(args, op, out_dir=run_dir),
         variant_prefix=args.author, max_iters=args.max_iters,
@@ -68,7 +80,8 @@ def _cmd_agent(args):
         op, _runner(args, op, out_dir=run_dir),
         model=args.model, max_attempts=args.max_attempts,
         target_speedup=args.target_speedup, variant_prefix=args.author,
-        inject_skill=args.inject_skill, run_dir=run_dir,
+        inject_skill=args.inject_skill, extra_system=_skill_bundle(args),
+        run_dir=run_dir,
     ).run()
     print(f"\n[anvil] artifacts archived in {run_dir}")
     if report.best:
@@ -102,7 +115,11 @@ def main():
     pr.add_argument("--out-dir", default="runs",
                     help="archive each run under <out-dir>/<op>_<timestamp>/ (default: runs/)")
     pr.add_argument("--inject-skill", action="store_true",
-                    help="inject the distilled PTX GEMM skill into the system prompt (A/B test)")
+                    help="legacy: inject the single distilled PTX skill string (EXP-001..003)")
+    pr.add_argument("--skill-level", default="none", choices=list(wiki.LEVELS),
+                    help="layered wiki bundle to inject (EXP-004): none|facts|heuristics|full")
+    pr.add_argument("--wiki-dir", default=None,
+                    help="path to forge wiki/ptx (default: sibling forge repo)")
     pr.set_defaults(func=_cmd_run)
 
     # agent: Route-AVO-lite — model drives a bench_kernel tool loop (DeepSeek v1)
@@ -115,7 +132,11 @@ def main():
     pa.add_argument("--out-dir", default="runs",
                     help="archive each run under <out-dir>/<op>_<timestamp>/ (default: runs/)")
     pa.add_argument("--inject-skill", action="store_true",
-                    help="inject the distilled PTX GEMM skill into the system prompt (A/B test)")
+                    help="legacy: inject the single distilled PTX skill string (EXP-001..003)")
+    pa.add_argument("--skill-level", default="none", choices=list(wiki.LEVELS),
+                    help="layered wiki bundle to inject (EXP-004): none|facts|heuristics|full")
+    pa.add_argument("--wiki-dir", default=None,
+                    help="path to forge wiki/ptx (default: sibling forge repo)")
     pa.set_defaults(func=_cmd_agent)
 
     args = p.parse_args()
