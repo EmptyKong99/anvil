@@ -25,7 +25,7 @@ def cell(r: dict) -> tuple[str, float | None]:
     so the row-max bolding skips failures."""
     if r.get("correct") and r.get("geomean_speedup") is not None:
         v = r["geomean_speedup"]
-        return (f"{v * 100:.1f}", v)            # percent of cuBLAS, 1 decimal
+        return (f"{v * 100:.1f}%", v)           # percent of cuBLAS, 1 decimal
     if r.get("stage") in ("compile", "validate"):
         return ("xC", None)
     if r.get("stage") == "bench":
