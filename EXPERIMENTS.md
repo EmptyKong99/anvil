@@ -39,7 +39,7 @@ skill best note 原话:"用裸 ldmatrix 和 mma.sync **遵循 expert recipe**,B 
 **下一步:** ① 每边重复 3–5 次,把 n=1 变成分布;② 修反馈(完整/head+tail 报错,且要给
 nvcc 真报错而不是 okbench traceback);③ 之后再扩 skill 内容并重测。
 
-**产物:** 服务器 `runs_ab/{base,skill}/gemm_bf16_nt_20260617_161943/`(kernel + results.jsonl + best.cu)。
+**产物:** `runs_exp001/{base,skill}/gemm_bf16_nt_20260617_161943/`(kernel + results.jsonl + best.cu;原名 `runs_ab`,已统一为 `runs_expNNN`)。
 
 ---
 
