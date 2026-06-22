@@ -24,6 +24,7 @@ class EvalResult:
     per_shape: list[dict] = field(default_factory=list)  # name, correct, speedup, ms
     geomean_speedup: float | None = None   # geomean(ref_ms / pure_ms) over correct shapes
     raw: dict[str, Any] = field(default_factory=dict)    # full okbench result JSON
+    resource: dict[str, Any] = field(default_factory=dict)  # ptxas regs/smem/spill (profile.py)
 
     @property
     def ok(self) -> bool:

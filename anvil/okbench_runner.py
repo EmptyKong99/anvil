@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import okeval
+from . import okeval, profile
 from .op import Op
 from .candidate import Candidate, EvalResult
 
@@ -55,5 +55,8 @@ class OKBenchRunner:
         )
         if not outcome.ok:
             return EvalResult(candidate, stage=outcome.stage, error=outcome.error)
-        return EvalResult.from_okbench(candidate, outcome.result,
-                                       correct_field=_CORRECT_FIELD_BY_OP.get(self.op.name))
+        result = EvalResult.from_okbench(candidate, outcome.result,
+                                         correct_field=_CORRECT_FIELD_BY_OP.get(self.op.name))
+        # Best-effort profile (ptxas regs/smem/spill); never let it break the bench.
+        result.resource = profile.ptxas_resources(self.repo, self.arch, candidate.kernel_cu)
+        return result

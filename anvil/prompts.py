@@ -1,6 +1,7 @@
 """Prompt construction for the kernel generator."""
 from __future__ import annotations
 
+from . import profile
 from .op import Op
 from .candidate import EvalResult
 
@@ -137,6 +138,9 @@ def feedback_for_result(result: EvalResult, *, best_geomean: float | None = None
         lines.append(f"CORRECT. Per-shape speedup vs reference:\n{rows}\n"
                      f"geomean {result.geomean_speedup:.4f}x. Now make it faster — "
                      f"attack the slowest shapes.")
+        diag = profile.diagnose(result.resource)
+        if diag:
+            lines.append(diag)
     if best_geomean is not None and (result.geomean_speedup or 0.0) < best_geomean:
         lines.append(f"Your best correct kernel so far: geomean {best_geomean:.4f}x.")
     return "\n".join(lines)
