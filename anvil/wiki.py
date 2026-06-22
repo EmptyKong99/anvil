@@ -16,6 +16,7 @@ second-order paraphrase.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 # subdir stack per level (cumulative)
@@ -46,8 +47,18 @@ def _clean(text: str) -> str:
     return "\n".join(out).rstrip()
 
 
-def load_bundle(level: str, wiki_dir: Path | str | None = None) -> str:
-    """Assemble the injected knowledge bundle for `level`."""
+def load_bundle(
+    level: str,
+    wiki_dir: Path | str | None = None,
+    exclude: Iterable[str] | None = None,
+) -> str:
+    """Assemble the injected knowledge bundle for `level`.
+
+    `exclude` is a set of card filenames (e.g. {"flash-attention-forward.md"}) to
+    drop from the bundle. This is how EXP-006 isolates an op-specific card: arm B =
+    facts MINUS the FA card (generic instruction primitives only), arm C = facts
+    with it. Matching is by md.name, so a name not present is simply a no-op.
+    """
     if level not in LEVELS:
         raise ValueError(f"unknown skill level {level!r}; choose {sorted(LEVELS)}")
     subdirs = LEVELS[level]
@@ -56,10 +67,13 @@ def load_bundle(level: str, wiki_dir: Path | str | None = None) -> str:
     root = Path(wiki_dir) if wiki_dir is not None else _DEFAULT_WIKI
     if not root.is_dir():
         raise FileNotFoundError(f"wiki dir not found: {root} (pass --wiki-dir)")
+    drop = set(exclude or ())
 
     parts: list[str] = [_BUNDLE_HEADER]
     for sub in subdirs:
         for md in sorted((root / sub).glob("*.md")):
+            if md.name in drop:
+                continue
             body = _clean(md.read_text())
             if body:
                 parts.append(f"===== {sub}/{md.name} =====\n{body}")

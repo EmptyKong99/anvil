@@ -26,7 +26,8 @@ def _skill_bundle(args) -> str:
     wins; else the legacy --inject-skill boolean; else nothing."""
     level = getattr(args, "skill_level", "none")
     if level and level != "none":
-        return wiki.load_bundle(level, getattr(args, "wiki_dir", None))
+        exclude = getattr(args, "wiki_exclude", None) or None
+        return wiki.load_bundle(level, getattr(args, "wiki_dir", None), exclude=exclude)
     return ""  # _cmd_* pass inject_skill through for the legacy path
 
 
@@ -120,6 +121,8 @@ def main():
                     help="layered wiki bundle to inject (EXP-004): none|facts|heuristics|full")
     pr.add_argument("--wiki-dir", default=None,
                     help="path to forge wiki/ptx (default: sibling forge repo)")
+    pr.add_argument("--wiki-exclude", nargs="*", default=None, metavar="CARD.md",
+                    help="card filenames to drop from the bundle (EXP-006 arm B)")
     pr.set_defaults(func=_cmd_run)
 
     # agent: Route-AVO-lite — model drives a bench_kernel tool loop (DeepSeek v1)
@@ -137,6 +140,8 @@ def main():
                     help="layered wiki bundle to inject (EXP-004): none|facts|heuristics|full")
     pa.add_argument("--wiki-dir", default=None,
                     help="path to forge wiki/ptx (default: sibling forge repo)")
+    pa.add_argument("--wiki-exclude", nargs="*", default=None, metavar="CARD.md",
+                    help="card filenames to drop from the bundle (EXP-006 arm B)")
     pa.set_defaults(func=_cmd_agent)
 
     args = p.parse_args()
