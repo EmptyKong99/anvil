@@ -112,7 +112,10 @@ class OpenAICompatGenerator(Generator):
         key = os.environ.get(api_key_env)
         if not key:
             raise RuntimeError(f"{api_key_env} not set in the environment")
-        self.client = OpenAI(api_key=key, base_url=base_url)
+        # Ride out the server↔DeepSeek link's intermittent slowness/blips (default
+        # httpx connect timeout is 5s → fast-fails; default SDK retries is 2).
+        self.client = OpenAI(api_key=key, base_url=base_url,
+                             timeout=90.0, max_retries=5)
         self.model = model
         self.max_tokens = max_tokens
 
@@ -192,8 +195,9 @@ LLMGenerator = ClaudeGenerator
 
 
 def make_generator(provider: str = "deepseek", model: str | None = None,
-                   inject_skill: bool = False) -> Generator:
-    extra = prompts.PTX_GEMM_SKILL if inject_skill else ""
+                   inject_skill: bool = False, extra_system: str = "") -> Generator:
+    # explicit extra_system (layered wiki bundle) wins; else the legacy boolean skill
+    extra = extra_system or (prompts.PTX_GEMM_SKILL if inject_skill else "")
     provider = provider.lower()
     if provider == "deepseek":
         return OpenAICompatGenerator(model=model or DEEPSEEK_MODEL, extra_system=extra)

@@ -72,6 +72,7 @@ class AgentRunner:
                  max_tokens: int = DEEPSEEK_MAX_TOKENS,
                  max_attempts: int = 8, target_speedup: float = 1.0,
                  variant_prefix: str = "gucheng", inject_skill: bool = False,
+                 extra_system: str = "",
                  run_dir: Path | None = None, verbose: bool = True,
                  client=None):
         self.op = op
@@ -81,7 +82,8 @@ class AgentRunner:
         self.max_attempts = max_attempts
         self.target_speedup = target_speedup
         self.variant_prefix = variant_prefix
-        self.inject_skill = inject_skill
+        # explicit bundle (layered wiki) wins; else legacy boolean skill
+        self.extra_system = extra_system or (prompts.PTX_GEMM_SKILL if inject_skill else "")
         self.run_dir = run_dir
         self.verbose = verbose
         if client is not None:
@@ -94,7 +96,11 @@ class AgentRunner:
             key = os.environ.get(api_key_env)
             if not key:
                 raise RuntimeError(f"{api_key_env} not set in the environment")
-            self.client = OpenAI(api_key=key, base_url=base_url)
+            # Ride out the server↔DeepSeek link's intermittent slowness/blips: a
+            # generous per-call timeout (default httpx connect is 5s → fast-fails)
+            # + extra SDK retries (default 2) so a flaky window doesn't truncate a rep.
+            self.client = OpenAI(api_key=key, base_url=base_url,
+                                 timeout=90.0, max_retries=5)
 
     def _log(self, msg: str) -> None:
         if self.verbose:
@@ -106,8 +112,8 @@ class AgentRunner:
             header_path=header_path, entry_symbol=self.op.entry_symbol,
             atol=self.op.atol, rtol=self.op.rtol,
         )
-        if self.inject_skill:
-            system += "\n\n" + prompts.PTX_GEMM_SKILL
+        if self.extra_system:
+            system += "\n\n" + self.extra_system
         user = prompts.build_user(self.op) + prompts.AGENT_TASK.format(budget=self.max_attempts)
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

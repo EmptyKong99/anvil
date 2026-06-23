@@ -10,6 +10,7 @@ from anvil.candidate import Candidate, EvalResult
 from anvil.baselines import SMOKE_KERNELS
 from anvil.okeval import trim_error
 from anvil.agent import AgentRunner
+from anvil import wiki
 
 
 def test_baseline_kernel_has_entry_symbol():
@@ -180,3 +181,59 @@ def test_agent_loop_respects_attempt_budget():
     AgentRunner(_fake_op(), runner, client=_scripted_client(forever),
                 max_attempts=3, target_speedup=99.0, verbose=False).run()
     assert len(runner.calls) == 3                            # budget enforced
+
+
+def _make_fake_wiki(tmp_path):
+    layout = {"facts": 2, "heuristics": 1, "menu": 1}
+    for sub, n in layout.items():
+        d = tmp_path / sub
+        d.mkdir()
+        for i in range(n):
+            (d / f"{i}.md").write_text(
+                f"# card {sub}{i}\nbody with a [[link]] inside\n## Cross-refs\n- drop me\n")
+    return tmp_path
+
+
+def test_wiki_bundle_levels_are_cumulative_and_cleaned(tmp_path):
+    w = _make_fake_wiki(tmp_path)
+    assert wiki.load_bundle("none", w) == ""
+    facts = wiki.load_bundle("facts", w)
+    heur = wiki.load_bundle("heuristics", w)
+    full = wiki.load_bundle("full", w)
+    assert len(facts) < len(heur) < len(full)          # each layer adds content
+    assert full.count("=====") // 2 == 4               # 2 facts + 1 heuristic + 1 menu
+    assert "[[" not in full and "Cross-refs" not in full   # wiki machinery stripped
+    assert "body with a link inside" in full           # link brackets removed, text kept
+
+
+def test_wiki_unknown_level_raises():
+    try:
+        wiki.load_bundle("bogus", ".")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_agent_injects_extra_system_bundle():
+    client = _scripted_client([SimpleNamespace(content="x", tool_calls=None)])
+    ar = AgentRunner(_fake_op(), _FakeRunner(), client=client,
+                     extra_system="ZZZ_BUNDLE_MARKER", verbose=False)
+    sys_msgs = [m["content"] for m in ar._messages() if m["role"] == "system"]
+    assert any("ZZZ_BUNDLE_MARKER" in s for s in sys_msgs)
+
+
+def test_from_okbench_correct_field_overrides_gate():
+    # flash_attention's default `correct` bit-matches cuDNN (too tight); we gate on
+    # the fp32-math field instead. Default unchanged; override flips a fp32-correct
+    # but cuDNN-mismatched shape to correct.
+    res = {"shapes": [
+        {"name": "fa0", "correct": False, "pure_over_reference": 60.0,
+         "pure_median_ms": 3.3, "correctness": {
+             "allclose_vs_cudnn": 0, "sampled_vs_fp32_math_allclose": 1,
+             "max_abs_vs_cudnn": 0.0156, "sampled_max_abs_vs_fp32": 0.0027}},
+    ]}
+    assert EvalResult.from_okbench(Candidate("x"), res).correct is False
+    f = EvalResult.from_okbench(Candidate("x"), res,
+                                correct_field="sampled_vs_fp32_math_allclose")
+    assert f.correct is True
+    assert f.per_shape[0]["max_abs"] == 0.0027     # meaningful max_abs fallback

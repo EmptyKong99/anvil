@@ -1,6 +1,7 @@
 """Prompt construction for the kernel generator."""
 from __future__ import annotations
 
+from . import profile
 from .op import Op
 from .candidate import EvalResult
 
@@ -65,11 +66,18 @@ register-resident f32 accumulators, ldmatrix feeding mma.sync per 16-wide k subs
 software-pipeline (issue both k-substep loads, then the mma) for a final ~1pp."""
 
 
+def _fmt_shape(s: dict) -> str:
+    # op-agnostic: print every dim key except the name (gemm has m/n/k; flash
+    # attention has B/H/S_q/S_kv/D/causal; etc.)
+    dims = ", ".join(f"{k}={v}" for k, v in s.items() if k != "name")
+    return f"  {s.get('name', '?')}: {dims}"
+
+
 def build_user(op: Op) -> str:
     return (
         f"Operator: {op.name}\n{op.description}\n\n"
-        f"Target shapes (all must pass), name: m,n,k =\n" +
-        "\n".join(f"  {s['name']}: {s['m']},{s['n']},{s['k']}" for s in op.shapes) +
+        f"Target shapes (all must pass):\n" +
+        "\n".join(_fmt_shape(s) for s in op.shapes) +
         f"\n\nC ABI you must implement (ops/{op.name}/interface.h):\n"
         f"```c\n{op.interface_h}\n```\n\n"
         f"Reference (ground truth the kernel is compared against):\n"
@@ -130,6 +138,9 @@ def feedback_for_result(result: EvalResult, *, best_geomean: float | None = None
         lines.append(f"CORRECT. Per-shape speedup vs reference:\n{rows}\n"
                      f"geomean {result.geomean_speedup:.4f}x. Now make it faster — "
                      f"attack the slowest shapes.")
+        diag = profile.diagnose(result.resource)
+        if diag:
+            lines.append(diag)
     if best_geomean is not None and (result.geomean_speedup or 0.0) < best_geomean:
         lines.append(f"Your best correct kernel so far: geomean {best_geomean:.4f}x.")
     return "\n".join(lines)

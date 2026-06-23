@@ -10,9 +10,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import okeval
+from . import okeval, profile
 from .op import Op
 from .candidate import Candidate, EvalResult
+
+
+# Ops whose okbench `correct` gate is unsound → judge correctness by a fp32-truth
+# field in the shape's `correctness` dict instead. flash_attention's default gate
+# bit-matches cuDNN's bf16 rounding at atol=0.002 (< 1 bf16 ULP) and rejects
+# correct kernels; gate on the fp32-math reference (atol 0.008) instead.
+_CORRECT_FIELD_BY_OP = {
+    "flash_attention_bf16_fwd_bhsd": "sampled_vs_fp32_math_allclose",
+}
 
 
 class OKBenchRunner:
@@ -20,9 +29,11 @@ class OKBenchRunner:
                  platform: str = "sm120_rtx5090", arch: str = "sm_120a",
                  device: int = 6, author: str = "gucheng",
                  python: str | None = None, suite: str = "required_5",
-                 timeout: int = 1800, out_dir: Path | None = None):
+                 timeout: int = 1800, out_dir: Path | None = None,
+                 profile_enabled: bool = True):
         self.op = op
         self.repo = op.repo_root
+        self.profile_enabled = profile_enabled
         self.hardware = hardware
         self.platform = platform
         self.arch = arch
@@ -46,4 +57,9 @@ class OKBenchRunner:
         )
         if not outcome.ok:
             return EvalResult(candidate, stage=outcome.stage, error=outcome.error)
-        return EvalResult.from_okbench(candidate, outcome.result)
+        result = EvalResult.from_okbench(candidate, outcome.result,
+                                         correct_field=_CORRECT_FIELD_BY_OP.get(self.op.name))
+        # Best-effort profile (ptxas regs/smem/spill); never let it break the bench.
+        if self.profile_enabled:
+            result.resource = profile.ptxas_resources(self.repo, self.arch, candidate.kernel_cu)
+        return result
