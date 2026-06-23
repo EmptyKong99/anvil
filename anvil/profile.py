@@ -84,35 +84,38 @@ def ptxas_resources(repo: Path | str, arch: str, kernel_src: str,
 
 
 def diagnose(resource: dict) -> str:
-    """One compact, actionable line per signal. '' if nothing worth saying."""
+    """Facts-first feedback: report what ptxas MEASURED + a neutral arithmetic
+    derivation. NO prescriptions ('reduce X', 'smaller tile', 'occupancy dominates').
+
+    Those prescriptions encode a prior that has been wrong: e.g. forge's FA v7 hit
+    56% via cp.async pipelining at LOW occupancy, not by cutting registers — so
+    'reduce regs for occupancy' can be actively misleading here. Whether occupancy
+    or latency-hiding is the bottleneck is the model's call (it has the wiki), and
+    okbench is the only judge. We hand it the numbers, not our opinion.
+    """
     if not resource:
         return ""
     regs = resource.get("registers")
     smem = resource.get("smem_bytes")
     spill = (resource.get("spill_stores") or 0) + (resource.get("spill_loads") or 0)
-    parts = []
     facts = []
     if regs is not None:
         facts.append(f"{regs} regs/thread")
     if smem is not None:
         facts.append(f"{smem} B smem/block")
+    facts.append(f"{spill} B spill→local")
+    if regs is None and smem is None:
+        return ""
+    out = ["PROFILE (ptxas, measured facts): " + ", ".join(facts) + "."]
+    # Neutral arithmetic, not advice — let the model weigh it against the wiki.
+    notes = []
+    if regs:
+        notes.append(f"the 64K-reg/SM file fits ≤{_REGS_PER_SM // regs} threads/SM at "
+                     "this reg count")
     if spill:
-        facts.append(f"{spill} B spill")
-    head = "PROFILE (ptxas): " + ", ".join(facts) if facts else ""
-
-    if spill:
-        parts.append(f"⚠️ REGISTER SPILLING ({spill} B) — the kernel spills to local "
-                     "memory, which serializes on slow loads/stores. Cut per-thread "
-                     "state (smaller fragment/accumulator tiles, fewer live vars).")
-    if regs is not None and regs >= 64:
-        parts.append(f"⚠️ high register pressure ({regs}/thread) — with a large block "
-                     f"this can pin you to 1 block/SM (≈{_REGS_PER_SM // regs} threads' "
-                     "worth of regs per SM); on sm_120 occupancy usually dominates.")
-    if smem is not None and smem >= 48 * 1024:
-        parts.append(f"⚠️ heavy shared memory ({smem} B/block) — fewer blocks/SM = lower "
-                     "occupancy; consider a smaller tile or swizzle-instead-of-pad.")
-    if not parts:
-        parts.append("resource usage looks moderate; the bottleneck is likely "
-                     "algorithmic (tiling / pipelining / memory coalescing), not "
-                     "occupancy.")
-    return (head + "\n" + "\n".join(parts)).strip() if head else "\n".join(parts)
+        notes.append(f"{spill} B of register state lives in (slower) local memory")
+    if notes:
+        out.append("(derivation, not advice: " + "; ".join(notes)
+                   + ". Whether occupancy or latency-hiding bounds you is yours to "
+                   "judge — okbench decides.)")
+    return "\n".join(out)
