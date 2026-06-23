@@ -29,9 +29,11 @@ class OKBenchRunner:
                  platform: str = "sm120_rtx5090", arch: str = "sm_120a",
                  device: int = 6, author: str = "gucheng",
                  python: str | None = None, suite: str = "required_5",
-                 timeout: int = 1800, out_dir: Path | None = None):
+                 timeout: int = 1800, out_dir: Path | None = None,
+                 profile_enabled: bool = True):
         self.op = op
         self.repo = op.repo_root
+        self.profile_enabled = profile_enabled
         self.hardware = hardware
         self.platform = platform
         self.arch = arch
@@ -58,5 +60,6 @@ class OKBenchRunner:
         result = EvalResult.from_okbench(candidate, outcome.result,
                                          correct_field=_CORRECT_FIELD_BY_OP.get(self.op.name))
         # Best-effort profile (ptxas regs/smem/spill); never let it break the bench.
-        result.resource = profile.ptxas_resources(self.repo, self.arch, candidate.kernel_cu)
+        if self.profile_enabled:
+            result.resource = profile.ptxas_resources(self.repo, self.arch, candidate.kernel_cu)
         return result

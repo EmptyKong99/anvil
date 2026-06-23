@@ -35,7 +35,7 @@ def _runner(args, op, out_dir: Path | None = None) -> OKBenchRunner:
     return OKBenchRunner(
         op, hardware=args.hardware, platform=args.platform, arch=args.arch,
         device=args.device, author=args.author, python=args.python, suite=args.suite,
-        out_dir=out_dir,
+        out_dir=out_dir, profile_enabled=not getattr(args, "no_profile", False),
     )
 
 
@@ -103,6 +103,8 @@ def main():
     common.add_argument("--author", default="gucheng")
     common.add_argument("--suite", default="required_5")
     common.add_argument("--python", default=None, help="python running okbench (default: this one)")
+    common.add_argument("--no-profile", action="store_true",
+                        help="disable the ptxas profiler feedback (EXP-007 off arm)")
 
     ps = sub.add_parser("smoke", parents=[common], help="hand-written kernel, no LLM")
     ps.set_defaults(func=_cmd_smoke)
