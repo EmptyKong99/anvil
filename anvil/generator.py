@@ -112,7 +112,10 @@ class OpenAICompatGenerator(Generator):
         key = os.environ.get(api_key_env)
         if not key:
             raise RuntimeError(f"{api_key_env} not set in the environment")
-        self.client = OpenAI(api_key=key, base_url=base_url)
+        # Ride out the server↔DeepSeek link's intermittent slowness/blips (default
+        # httpx connect timeout is 5s → fast-fails; default SDK retries is 2).
+        self.client = OpenAI(api_key=key, base_url=base_url,
+                             timeout=90.0, max_retries=5)
         self.model = model
         self.max_tokens = max_tokens
 

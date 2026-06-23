@@ -96,7 +96,11 @@ class AgentRunner:
             key = os.environ.get(api_key_env)
             if not key:
                 raise RuntimeError(f"{api_key_env} not set in the environment")
-            self.client = OpenAI(api_key=key, base_url=base_url)
+            # Ride out the server↔DeepSeek link's intermittent slowness/blips: a
+            # generous per-call timeout (default httpx connect is 5s → fast-fails)
+            # + extra SDK retries (default 2) so a flaky window doesn't truncate a rep.
+            self.client = OpenAI(api_key=key, base_url=base_url,
+                                 timeout=90.0, max_retries=5)
 
     def _log(self, msg: str) -> None:
         if self.verbose:
